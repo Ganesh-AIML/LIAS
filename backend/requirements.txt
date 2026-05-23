@@ -105,7 +105,7 @@ opencv-contrib-python==4.13.0.92
 opencv-python==4.13.0.92
 openpyxl==3.1.5
 orjson==3.11.0
-ormsgpack==1.10.0
+msgpack==1.0.8
 packaging==25.0
 panda==0.3.1
 pandas==2.2.3
