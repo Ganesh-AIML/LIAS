@@ -136,17 +136,14 @@ def verify_exam_password(
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found")
 
-    if payload.type == "start":
-        if payload.password != "start_123":
-            raise HTTPException(status_code=403, detail="Incorrect Start Password")
-            
-    elif payload.type == "end":
-        # ROOT SOLUTION: Use bcrypt.checkpw instead of pwd_ctx.verify
-        if not exam_record.end_password_hash or not bcrypt.checkpw(
-            payload.password.encode('utf-8'), 
-            exam_record.end_password_hash.encode('utf-8')
-        ):
-            raise HTTPException(status_code=403, detail="Incorrect End Password")
+    # Determine which hash to use based on password type
+    target_hash = exam_record.start_password_hash if payload.type == "start" else exam_record.end_password_hash
+    
+    if not target_hash or not bcrypt.checkpw(
+        payload.password.encode('utf-8'), 
+        target_hash.encode('utf-8')
+    ):
+        raise HTTPException(status_code=403, detail=f"Incorrect {payload.type.capitalize()} Password")
 
     return {"success": True}
 

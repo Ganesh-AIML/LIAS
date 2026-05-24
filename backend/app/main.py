@@ -21,13 +21,14 @@ def seed_database():
         def hash_password(plain: str) -> str:
             return bcrypt.hashpw(plain.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-        # Create Exam
+        # Create Exam (UPDATED: Added start_password_hash)
         test_exam = Exam(
             id="exam_789",
             title="S.C.O.P.E. Master Blueprint Assessment",
             duration_seconds=7200,
             starts_at=time.time() - 100,
-            end_password_hash=hash_password("end")
+            start_password_hash=hash_password("start_123"), # Added this
+            end_password_hash=hash_password("end_123")
         )
         db.add(test_exam)
 

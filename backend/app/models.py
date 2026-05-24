@@ -16,6 +16,7 @@ class Exam(Base):
     title            = Column(String, nullable=False)
     duration_seconds = Column(Integer, default=3600)
     starts_at        = Column(Float, nullable=False)
+    start_password_hash = Column(String, nullable=False)
     end_password_hash = Column(String, nullable=True)
 
 class ExamSession(Base):
