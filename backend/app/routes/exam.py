@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.database import get_db
 from app.auth import verify_session_guard
-from passlib.context import CryptContext
 from app.models import Exam
 from app.models import ViolationLog
 import time
+import bcrypt
 
 router = APIRouter()
 
@@ -24,7 +24,6 @@ class SubmitPayload(BaseModel):
     autoSubmit: bool = False
 
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class PasswordVerifyPayload(BaseModel):
     type: str  # 'start' or 'end'
     password: str
@@ -138,14 +137,15 @@ def verify_exam_password(
         raise HTTPException(status_code=404, detail="Exam not found")
 
     if payload.type == "start":
-        # We haven't added a start_password to the DB model yet, so we will hardcode 
-        # a universal start password for the invigilator for now.
         if payload.password != "start_123":
             raise HTTPException(status_code=403, detail="Incorrect Start Password")
             
     elif payload.type == "end":
-        # Verify the end password against the bcrypt hash we seeded in the database
-        if not exam_record.end_password_hash or not pwd_ctx.verify(payload.password, exam_record.end_password_hash):
+        # ROOT SOLUTION: Use bcrypt.checkpw instead of pwd_ctx.verify
+        if not exam_record.end_password_hash or not bcrypt.checkpw(
+            payload.password.encode('utf-8'), 
+            exam_record.end_password_hash.encode('utf-8')
+        ):
             raise HTTPException(status_code=403, detail="Incorrect End Password")
 
     return {"success": True}

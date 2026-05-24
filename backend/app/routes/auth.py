@@ -13,8 +13,6 @@ import time
 router = APIRouter()
 logger = logging.getLogger("scope")
 
-# FIX: bcrypt context for password hashing and constant-time verification
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class JoinPayload(BaseModel):
     student_id: str
