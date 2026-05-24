@@ -45,3 +45,19 @@ def verify_session_guard(credentials: HTTPAuthorizationCredentials = Depends(sec
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Please log in again.")
     except jwt.PyJWTError:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cryptographic authorization signature failed validation")
+    
+def verify_socket_token(token: str, exam_id: str):
+    # This is your existing logic to validate a session token
+    # Ensure this matches how your system validates tokens
+    from app.database import SessionLocal
+    from app.models import ExamSession
+    
+    db = SessionLocal()
+    # Example logic: verify session exists and isn't revoked
+    session = db.query(ExamSession).filter(
+        ExamSession.session_secret == token,
+        ExamSession.exam_id == exam_id,
+        ExamSession.is_revoked == False
+    ).first()
+    db.close()
+    return session
