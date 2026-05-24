@@ -4,7 +4,7 @@ from secrets import token_hex
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
+import bcrypt
 from app.database import get_db
 from app.models import TokenRegistry, ExamSession, Exam
 from app.auth import create_session_jwt, verify_session_guard
@@ -55,7 +55,10 @@ def join_exam_pipeline(payload: JoinPayload, db: Session = Depends(get_db)):
     # timing-based user enumeration — attacker cannot tell if token vs password failed.
     dummy_hash = "$2b$12$KIXkJ1yGbRPGSmPPmoBvOuoO3a8EJHxRPbPCw/dqxRdAb9RXq9z7i"
     stored_hash = token_record.password_hash if token_record else dummy_hash
-    password_ok = pwd_ctx.verify(payload.password[:72], stored_hash)
+    password_ok = bcrypt.checkpw(
+    payload.password.encode('utf-8'), 
+    stored_hash.encode('utf-8')
+)
 
     if not token_record or not password_ok:
         raise HTTPException(

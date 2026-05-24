@@ -11,7 +11,7 @@ END_PASSWORD = "end"
 EXAM_TOKEN = "LIAS_TOKEN"
 
 def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain[:72].encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(plain.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 db = SessionLocal()
 
