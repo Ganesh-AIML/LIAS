@@ -55,7 +55,7 @@ def join_exam_pipeline(payload: JoinPayload, db: Session = Depends(get_db)):
     # timing-based user enumeration — attacker cannot tell if token vs password failed.
     dummy_hash = "$2b$12$KIXkJ1yGbRPGSmPPmoBvOuoO3a8EJHxRPbPCw/dqxRdAb9RXq9z7i"
     stored_hash = token_record.password_hash if token_record else dummy_hash
-    password_ok = pwd_ctx.verify(payload.password, stored_hash)
+    password_ok = pwd_ctx.verify(payload.password[:72], stored_hash)
 
     if not token_record or not password_ok:
         raise HTTPException(
