@@ -8,7 +8,8 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import api from '../services/api';
+import api, { violationApi } from '../services/api';
+import { useAuthStore } from '../store/authStore';
 import { useTrueTime } from '../hooks/useTrueTime';
 
 const Editor = lazy(() => import('@monaco-editor/react'));
@@ -110,6 +111,20 @@ export default function ExamWorkspace() {
   const [showViolationModal, setShowViolationModal] = useState(false);
   const MAX_VIOLATIONS = 3;
 
+  // Issue 28: fetch authoritative violation count from server on each violation
+  const syncViolationCount = async () => {
+    try {
+      const res = await api.get('/exam/violation/count');
+      if (res.data?.count !== undefined) {
+        setViolationCount(res.data.count);
+        return res.data.count;
+      }
+    } catch {
+      // network failure — fall back to local count already incremented
+    }
+    return null;
+  };
+
   const [consoleOutput, setConsoleOutput] = useState('Ready to compile...');
   const [selectedTestCase, setSelectedTestCase] = useState(0);
   
@@ -122,18 +137,35 @@ export default function ExamWorkspace() {
   const [isResizing, setIsResizing] = useState(false);
 
   // 🛡️ AUTO-SAVE: Cache answers and source code
+  // Issue 29: wrapped in try/catch — sessionStorage has a 5-10MB limit; silent failure loses answers
   useEffect(() => {
-    if (Object.keys(answers).length > 0) sessionStorage.setItem(`scope_answers_${examId}`, JSON.stringify(answers));
+    if (Object.keys(answers).length > 0) {
+      try {
+        sessionStorage.setItem(`scope_answers_${examId}`, JSON.stringify(answers));
+      } catch (e) {
+        console.warn('Storage quota exceeded — answers not cached locally', e);
+      }
+    }
   }, [answers, examId]);
 
   useEffect(() => {
-    if (Object.keys(savedCodes).length > 0) sessionStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
+    if (Object.keys(savedCodes).length > 0) {
+      try {
+        sessionStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
+      } catch (e) {
+        console.warn('Storage quota exceeded — code not cached locally', e);
+      }
+    }
   }, [savedCodes, examId]);
 
   useEffect(() => {
     if (sourceCode && sourceCode !== '// Loading code...') {
-      sessionStorage.setItem(`scope_active_source_${examId}`, sourceCode);
-      sessionStorage.setItem(`scope_active_lang_${examId}`, language);
+      try {
+        sessionStorage.setItem(`scope_active_source_${examId}`, sourceCode);
+        sessionStorage.setItem(`scope_active_lang_${examId}`, language);
+      } catch (e) {
+        console.warn('Storage quota exceeded — active source not cached locally', e);
+      }
     }
   }, [sourceCode, language, examId]);
 
@@ -147,9 +179,11 @@ export default function ExamWorkspace() {
 
   // Socket Live Timer Sync
   useEffect(() => {
-    const socketURL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-    const socket = io(socketURL); 
-    socket.emit('join_exam_room', examId);
+    const socketURL = import.meta.env.VITE_API_URL;
+    const socket = io(socketURL);
+    // Issue 27: send JWT so server can authenticate the WebSocket session
+    const jwt = useAuthStore.getState().sessionJwt;
+    socket.emit('join_exam_room', { exam_id: examId, token: jwt });
     
     socket.on('exam_time_synced', (updatedTimes) => {
       setExamData((prevData) => {
@@ -167,14 +201,16 @@ export default function ExamWorkspace() {
     if (!document.fullscreenElement) setTimeout(() => setNeedsFullscreen(true), 0);
 
     const logViolation = (event_type, detail = '') => {
-      api.post('/exam/violation', { event_type, detail }).catch(() => {});
+      violationApi.post('/exam/violation', { event_type, detail }).catch(() => {});
     };
 
     const triggerViolation = (event_type, detail = '') => {
       logViolation(event_type, detail);
-      // FIX: separate setState calls — never call setState inside another setState
-      setViolationCount(prev => prev + 1);
-      setShowViolationModal(true);
+      // Issue 28: sync with server count after logging; fall back to local increment on failure
+      syncViolationCount().then(serverCount => {
+        if (serverCount === null) setViolationCount(prev => prev + 1);
+        setShowViolationModal(true);
+      });
     };
 
     // 1. Tab switch / window blur

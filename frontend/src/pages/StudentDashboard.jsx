@@ -64,6 +64,7 @@ export default function StudentDashboard() {
   const [passwords, setPasswords] = useState({ current: '', new: '', confirm: '' });
   const [isUpdating, setIsUpdating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const dashboardHeartbeatRef = useRef(null);
 
   // 🛡️ THE FIX: Create a stable reference to ts
   const { ts, isSynced } = useTrueTime();
@@ -131,13 +132,23 @@ export default function StudentDashboard() {
       setPastExams(combinedPast);
     };
 
-    updateDashboardBuckets(); 
-    const heartbeat = setInterval(updateDashboardBuckets, 60000); 
+    uupdateDashboardBuckets();
 
-    return () => clearInterval(heartbeat);
+    // Issue 26: store interval in ref so manual refresh can reset it
+    dashboardHeartbeatRef.current = setInterval(updateDashboardBuckets, 60000);
+
+    return () => clearInterval(dashboardHeartbeatRef.current);
+
   }, [isSynced, rawAvailableTests, rawPastResults]); // <--- 'ts' is gone from here
 
   const handleStudentRefresh = async () => {
+    // Issue 26: reset the 60s polling interval so it doesn't fire right after a manual refresh
+    if (dashboardHeartbeatRef.current) {
+      clearInterval(dashboardHeartbeatRef.current);
+      dashboardHeartbeatRef.current = setInterval(() => {
+        // re-fetch on next tick — rawAvailableTests state drives bucket recalculation via the other useEffect
+      }, 60000);
+    }
     setIsRefreshing(true);
     try {
       const response = await api.get('/exam/student/available-tests');
@@ -169,7 +180,7 @@ export default function StudentDashboard() {
       setPasswords({ current: '', new: '', confirm: '' }); 
       setIsProfileOpen(false); 
     } catch (error) {
-      alert(error.response?.data?.error || "Failed to update password.");
+      alert(error.response?.data?.detail || "Failed to update password.");
     } finally {
       setIsUpdating(false);
     }
@@ -197,7 +208,7 @@ export default function StudentDashboard() {
       setShowStartModal(false);
       navigate(`/workspace/${selectedTestId}`);
     } catch (error) {
-      setStartPasswordError(error.response?.data?.error || "Incorrect Start Password");
+      setStartPasswordError(error.response?.data?.detail || "Incorrect Start Password");
     } finally {
       setIsVerifying(false);
     }

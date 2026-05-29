@@ -15,18 +15,34 @@ export default function StudentAuth() {
 
   const handleJoin = async (e) => {
     e.preventDefault();
-    setLoading(true); setError('');
+    setError('');
+
+    // Issue 22: client-side validation before hitting the API
+    if (name.trim().length < 2) {
+      setError('Student ID must be at least 2 characters.');
+      return;
+    }
+    if (token.trim().length < 4) {
+      setError('Exam token must be at least 4 characters.');
+      return;
+    }
+    if (!password) {
+      setError('Password is required.');
+      return;
+    }
+
+    setLoading(true);
     try {
       const response = await api.post('/auth/join', {
         student_id: name.trim(),
-        password: password.trim(), // Added password payload
-        exam_token: token.trim()
+        password: password,   // Issue 23: no .trim() on password — spaces are valid
+        exam_token: token.trim(),
       });
       const { session_jwt, exam_id, session_id } = response.data;
       setAuthSession(name.trim(), token.trim(), session_jwt, exam_id, session_id);
       navigate('/precheck');
     } catch (err) {
-      setError('Invalid credentials or token.');
+      setError(err.response?.data?.detail || 'Invalid credentials or token.');
     } finally {
       setLoading(false);
     }
@@ -39,15 +55,15 @@ export default function StudentAuth() {
           <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">LIAS</h1>
           <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Secure Assessment Portal</p>
         </div>
-        
+
         {error && <div className="bg-rose-50 text-rose-500 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>}
-        
+
         <form onSubmit={handleJoin} className="space-y-5">
           <div>
             <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Student Identifier</label>
             <div className="relative">
               <User size={18} className="absolute left-3 top-3 text-slate-400" />
-              <input type="text" required value={name} onChange={e => setName(e.target.value)} 
+              <input type="text" required value={name} onChange={e => setName(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#06B6D4] outline-none" />
             </div>
           </div>
@@ -56,16 +72,16 @@ export default function StudentAuth() {
             <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Password</label>
             <div className="relative">
               <Lock size={18} className="absolute left-3 top-3 text-slate-400" />
-              <input type="password" required value={password} onChange={e => setPassword(e.target.value)} 
+              <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#06B6D4] outline-none" />
             </div>
           </div>
-          
+
           <div>
             <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Exam Token</label>
             <div className="relative">
               <KeyRound size={18} className="absolute left-3 top-3 text-slate-400" />
-              <input type="text" required value={token} onChange={e => setToken(e.target.value)} 
+              <input type="text" required value={token} onChange={e => setToken(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#06B6D4] outline-none" />
             </div>
           </div>

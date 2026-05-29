@@ -12,3 +12,4 @@ python-engineio
 aiohttp
 python-jose[cryptography]
 PyJWT
+slowapi
