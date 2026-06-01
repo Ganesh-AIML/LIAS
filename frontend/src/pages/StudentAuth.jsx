@@ -32,8 +32,11 @@ export default function StudentAuth() {
     }
 
     setLoading(true);
-    try {
-      const response = await api.post('/auth/join', {
+const timeoutId = setTimeout(() => {
+  setError('Server is waking up — this may take 15–20 seconds on first login. Please wait...');
+}, 4000);
+try {
+  const response = await api.post('/auth/join', {
         student_id: name.trim(),
         password: password,   // Issue 23: no .trim() on password — spaces are valid
         exam_token: token.trim(),
@@ -44,8 +47,9 @@ export default function StudentAuth() {
     } catch (err) {
       setError(err.response?.data?.detail || 'Invalid credentials or token.');
     } finally {
-      setLoading(false);
-    }
+    clearTimeout(timeoutId);
+    setLoading(false);
+  }
   };
 
   return (

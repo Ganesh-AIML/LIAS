@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTrueTime } from '../hooks/useTrueTime'; 
 import { useAuthStore } from '../store/authStore';
-import api from '../services/api'; 
+import api, { violationApi } from '../services/api';
 import {
   User, Lock, Clock, Calendar, CheckCircle,
   XCircle, PlayCircle, LogOut, X, Activity, BookOpen, KeyRound,
@@ -48,6 +48,13 @@ export default function StudentDashboard() {
   const navigate = useNavigate();
   const clearSession = useAuthStore((state) => state.clearSession);
   
+const [isFullscreen, setIsFullscreen] = useState(!!document.fullscreenElement);
+useEffect(() => {
+  const handleFs = () => setIsFullscreen(!!document.fullscreenElement);
+  document.addEventListener('fullscreenchange', handleFs);
+  return () => document.removeEventListener('fullscreenchange', handleFs);
+}, []);
+
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [showStartModal, setShowStartModal] = useState(false);
   const [selectedTestId, setSelectedTestId] = useState(null);
@@ -132,7 +139,7 @@ export default function StudentDashboard() {
       setPastExams(combinedPast);
     };
 
-    uupdateDashboardBuckets();
+    updateDashboardBuckets();
 
     // Issue 26: store interval in ref so manual refresh can reset it
     dashboardHeartbeatRef.current = setInterval(updateDashboardBuckets, 60000);
@@ -204,7 +211,7 @@ export default function StudentDashboard() {
     setIsVerifying(true);
     setStartPasswordError('');
     try {
-      await api.post(`/exam/${selectedTestId}/verify-password`, { type: 'start', password: startPasswordInput });
+      await violationApi.post(`/exam/${selectedTestId}/verify-password`, { type: 'start', password: startPasswordInput });
       setShowStartModal(false);
       navigate(`/workspace/${selectedTestId}`);
     } catch (error) {
@@ -236,6 +243,22 @@ export default function StudentDashboard() {
       </nav>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-10">
+        {!isFullscreen && (
+  <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
+    <div className="flex items-center gap-3">
+      <span className="text-amber-500 text-lg">⚠️</span>
+      <p className="text-sm font-bold text-amber-700">
+        Fullscreen is inactive. It will be enforced when you enter the exam.
+      </p>
+    </div>
+    <button
+      onClick={() => document.documentElement.requestFullscreen().catch(() => {})}
+      className="text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 px-3 py-1.5 rounded-lg whitespace-nowrap ml-4"
+    >
+      Re-enter Fullscreen
+    </button>
+  </div>
+)}
         <section>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-2">

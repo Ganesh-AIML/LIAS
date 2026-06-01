@@ -7,6 +7,7 @@ import StudentAuth     from './pages/StudentAuth';
 import PreExamCheck    from './pages/PreExamCheck';
 import StudentDashboard from './pages/StudentDashboard';
 import ExamWorkspace   from './pages/ExamWorkspace';
+import AdminDashboard  from './pages/admin/AdminDashboard';
 
 // Attempts silent re-authentication using the persisted examToken.
 // Called when the JWT is missing but examId + examToken exist in sessionStorage
@@ -78,6 +79,9 @@ export default function App() {
         <Route path="/workspace/:examId" element={
           <ProtectedRoute><PreCheckRoute><ExamWorkspace /></PreCheckRoute></ProtectedRoute>
         } />
+
+        {/* Admin — standalone, no JWT guard, uses its own token gate */}
+        <Route path="/admin" element={<AdminDashboard />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

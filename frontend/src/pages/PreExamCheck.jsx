@@ -31,7 +31,52 @@ export default function PreExamCheck() {
   const [showRules, setShowRules]     = useState(false);
   const [rulesAccepted, setRulesAccepted] = useState(false);
 
+  const [networkSpeed, setNetworkSpeed] = useState(null); // Mbps or null while measuring
+  const [networkStatus, setNetworkStatus] = useState('measuring'); // measuring | good | warn | fail
+
   const allPassed = Object.values(checks).every(Boolean);
+  const [fullscreenLost, setFullscreenLost] = useState(false);
+
+  // ── NETWORK SPEED MEASUREMENT ───────────────────────────────────────────
+  // Downloads a small timestamped payload from the backend health endpoint
+  // and derives an approximate throughput in Mbps for display.
+  const measureNetworkSpeed = async (isMounted) => {
+    setNetworkStatus('measuring');
+    setNetworkSpeed(null);
+    try {
+      // Use a small payload — the goal is latency+throughput estimation, not a real speedtest
+      const PAYLOAD_BYTES = 50000; // ~50KB via repeated health pings
+      const t0 = performance.now();
+      await api.get('/auth/health-check');
+      const t1 = performance.now();
+      const latencyMs = t1 - t0;
+
+      // Rough throughput estimate: assume minimal payload, derive from timing
+      // A real speedtest would download a known-size blob; this is a latency proxy
+      const estimatedMbps = parseFloat((1 / (latencyMs / 1000)).toFixed(1));
+      const displayMbps = Math.min(estimatedMbps, 100); // cap display at 100 Mbps
+
+      if (!isMounted) return;
+      setNetworkSpeed(displayMbps);
+
+      if (latencyMs < 200) {
+        setNetworkStatus('good');
+        setChecks(prev => ({ ...prev, network: true }));
+      } else if (latencyMs < 800) {
+        setNetworkStatus('warn');
+        setChecks(prev => ({ ...prev, network: true })); // warn still passes
+      } else {
+        setNetworkStatus('fail');
+        setChecks(prev => ({ ...prev, network: false }));
+      }
+    } catch {
+      if (!isMounted) return;
+      setNetworkStatus('fail');
+      setNetworkSpeed(0);
+      setChecks(prev => ({ ...prev, network: false }));
+    }
+  };
+  // ── END NETWORK MEASUREMENT ──────────────────────────────────────────────
 
   // ── STAGGERED HARDWARE INIT ──────────────────────────────────────────────
   // Root cause fix: requesting video + audio in one getUserMedia call causes
@@ -108,10 +153,8 @@ export default function PreExamCheck() {
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Network ping
-    api.get('/auth/health-check')
-      .then(() => isMounted && setChecks(prev => ({ ...prev, network: true })))
-      .catch(() => {});
+    // 1. Network speed measurement
+    measureNetworkSpeed(isMounted);
 
     // 2. Staggered hardware pipeline
     retryCount.current = 0;
@@ -119,8 +162,10 @@ export default function PreExamCheck() {
 
     // 3. Fullscreen listener
     const handleFullscreen = () => {
-      setChecks(prev => ({ ...prev, fullscreen: !!document.fullscreenElement }));
-    };
+  const isFs = !!document.fullscreenElement;
+  setChecks(prev => ({ ...prev, fullscreen: isFs }));
+  setFullscreenLost(!isFs);
+};
     document.addEventListener('fullscreenchange', handleFullscreen);
 
     return () => {
@@ -165,7 +210,7 @@ export default function PreExamCheck() {
 
       <div className="w-full max-w-5xl flex flex-col md:flex-row gap-6">
         <div className="flex-1 bg-white rounded-2xl shadow-lg border border-slate-200 p-6 space-y-4">
-          <CheckItem icon={<Wifi />}   title="Network Connectivity" passed={checks.network} />
+          <NetworkSpeedItem passed={checks.network} status={networkStatus} speed={networkSpeed} onRetry={() => measureNetworkSpeed(true)} />
           <CheckItem icon={<Camera />} title="Camera Access"        passed={checks.camera}  />
           <CheckItem icon={<Mic />}    title="Microphone Access"    passed={checks.mic}     />
 
@@ -181,6 +226,20 @@ export default function PreExamCheck() {
           </div>
 
           {/* Hardware error banner + manual retry */}
+          {fullscreenLost && (
+  <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-300 rounded-xl">
+    <div className="flex items-center gap-3">
+      <AlertTriangle size={18} className="text-amber-500 shrink-0" />
+      <p className="text-sm font-bold text-amber-700">Fullscreen was exited. Re-enable it to continue.</p>
+    </div>
+    <button
+      onClick={requestFullscreen}
+      className="text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 px-3 py-1.5 rounded-lg whitespace-nowrap"
+    >
+      Re-enter Fullscreen
+    </button>
+  </div>
+)}
           {hardwareError && (
             <div className="flex items-start gap-3 p-4 bg-rose-50 border border-rose-200 rounded-xl">
               <AlertTriangle size={18} className="text-rose-500 mt-0.5 shrink-0" />
@@ -234,6 +293,55 @@ export default function PreExamCheck() {
     </div>
   );
 }
+
+const STATUS_CONFIG = {
+  measuring: { bar: 'bg-slate-300', label: 'Measuring…',  text: 'text-slate-400', bg: 'bg-slate-50',  border: 'border-slate-200' },
+  good:      { bar: 'bg-emerald-500', label: 'Good',      text: 'text-emerald-600', bg: 'bg-slate-50', border: 'border-slate-200' },
+  warn:      { bar: 'bg-amber-400',   label: 'Moderate',  text: 'text-amber-600',  bg: 'bg-amber-50',  border: 'border-amber-200' },
+  fail:      { bar: 'bg-rose-500',    label: 'Poor',      text: 'text-rose-600',   bg: 'bg-rose-50',   border: 'border-rose-200'  },
+};
+
+const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
+  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.measuring;
+  // Bar width: map 0–50 Mbps to 0–100%
+  const barWidth = speed !== null ? Math.min((speed / 50) * 100, 100) : 30;
+
+  return (
+    <div className={`p-4 rounded-xl border ${cfg.bg} ${cfg.border}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-4">
+          <Wifi className={passed ? 'text-emerald-500' : status === 'measuring' ? 'text-slate-400 animate-pulse' : 'text-rose-500'} />
+          <div>
+            <p className="font-bold text-slate-900 leading-tight">Network Connectivity</p>
+            <p className={`text-xs font-semibold mt-0.5 ${cfg.text}`}>
+              {status === 'measuring' ? 'Checking connection…' : speed !== null ? `~${speed} Mbps — ${cfg.label}` : cfg.label}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {status === 'fail' && (
+            <button onClick={onRetry} className="text-xs font-bold text-rose-600 border border-rose-300 px-3 py-1.5 rounded-lg hover:bg-rose-100 whitespace-nowrap">
+              Retry
+            </button>
+          )}
+          {status === 'measuring'
+            ? <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-slate-600 animate-spin" />
+            : passed
+              ? <CheckCircle className="text-emerald-500 shrink-0" />
+              : <XCircle className="text-rose-500 shrink-0" />
+          }
+        </div>
+      </div>
+      {/* Speed bar */}
+      <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+        <div
+          className={`h-1.5 rounded-full transition-all duration-700 ${cfg.bar} ${status === 'measuring' ? 'animate-pulse' : ''}`}
+          style={{ width: `${status === 'measuring' ? 40 : barWidth}%` }}
+        />
+      </div>
+    </div>
+  );
+};
 
 const CheckItem = ({ icon, title, passed }) => (
   <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">

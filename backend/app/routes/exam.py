@@ -9,8 +9,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.auth import verify_session_guard
 from app.models import Exam, ViolationLog, TokenRegistry
-from app.main import limiter
-from sqlalchemy.orm import joinedload
+from app.limiter import limiter
 
 router = APIRouter()
 logger = logging.getLogger("scope")
@@ -150,6 +149,7 @@ def load_exam_workspace(
             "title":    exam_record.title,
             "date":     exam_record.starts_at * 1000,
             "duration": exam_record.duration_seconds // 60,
+            "maxViolations": 3,
             "codingProblems": [
                 {
                     "id":          "code_1",

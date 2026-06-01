@@ -85,21 +85,21 @@ export default function ExamWorkspace() {
 
   // 🛡️ RECOVERY ENGINE: Lazy initialization directly from SessionStorage (Fixes ESLint performance warning)
   const [answers, setAnswers] = useState(() => {
-    const cached = sessionStorage.getItem(`scope_answers_${examId}`);
+    const cached = localStorage.getItem(`scope_answers_${examId}`);
     return cached ? JSON.parse(cached) : {};
   });
   
   const [savedCodes, _setSavedCodes] = useState(() => {
-    const cached = sessionStorage.getItem(`scope_codes_${examId}`);
+    const cached = localStorage.getItem(`scope_codes_${examId}`);
     return cached ? JSON.parse(cached) : {};
   });
 
   const [language, setLanguage] = useState(() => {
-    return sessionStorage.getItem(`scope_active_lang_${examId}`) || '71';
+    return localStorage.getItem(`scope_active_lang_${examId}`) || '71';
   });
   
   const [sourceCode, setSourceCode] = useState(() => {
-    return sessionStorage.getItem(`scope_active_source_${examId}`) || '// Loading code...';
+    return localStorage.getItem(`scope_active_source_${examId}`) || '// Loading code...';
   });
 
   const [toastMessage, setToastMessage] = useState('');
@@ -107,9 +107,23 @@ export default function ExamWorkspace() {
   const [isCodingLocked, setIsCodingLocked] = useState(false);
   const [mcqStartTime, setMcqStartTime] = useState(null);
   const [needsFullscreen, setNeedsFullscreen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+useEffect(() => {
+  const goOnline  = () => setIsOnline(true);
+  const goOffline = () => setIsOnline(false);
+  window.addEventListener('online',  goOnline);
+  window.addEventListener('offline', goOffline);
+  return () => {
+    window.removeEventListener('online',  goOnline);
+    window.removeEventListener('offline', goOffline);
+  };
+}, []);
+
+
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationModal, setShowViolationModal] = useState(false);
-  const MAX_VIOLATIONS = 3;
+  const MAX_VIOLATIONS = examData?.maxViolations ?? 3;
 
   // Issue 28: fetch authoritative violation count from server on each violation
   const syncViolationCount = async () => {
@@ -141,7 +155,7 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (Object.keys(answers).length > 0) {
       try {
-        sessionStorage.setItem(`scope_answers_${examId}`, JSON.stringify(answers));
+        localStorage.setItem(`scope_answers_${examId}`, JSON.stringify(answers));
       } catch (e) {
         console.warn('Storage quota exceeded — answers not cached locally', e);
       }
@@ -151,7 +165,7 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (Object.keys(savedCodes).length > 0) {
       try {
-        sessionStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
+        localStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
       } catch (e) {
         console.warn('Storage quota exceeded — code not cached locally', e);
       }
@@ -161,8 +175,8 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (sourceCode && sourceCode !== '// Loading code...') {
       try {
-        sessionStorage.setItem(`scope_active_source_${examId}`, sourceCode);
-        sessionStorage.setItem(`scope_active_lang_${examId}`, language);
+        localStorage.setItem(`scope_active_source_${examId}`, sourceCode);
+        localStorage.setItem(`scope_active_lang_${examId}`, language);
       } catch (e) {
         console.warn('Storage quota exceeded — active source not cached locally', e);
       }
@@ -417,15 +431,18 @@ export default function ExamWorkspace() {
     setEndPasswordError('');
     try {
       // Verify end password first
-      const verifyRes = await api.post(`/exam/${examId}/verify-password`, { type: 'end', password: endPasswordInput });
+      const verifyRes = await violationApi.post(`/exam/${examId}/verify-password`, { type: 'end', password: endPasswordInput });
       if (!verifyRes.data.success) {
         setEndPasswordError(verifyRes.data.error || "Incorrect End Password.");
         setIsSubmitting(false);
         return;
       }
       await api.post(`/exam/${examId}/submit`, { answers });
-      setShowEndModal(false);
-      navigate('/dashboard');
+['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
+  localStorage.removeItem(`scope_${key}_${examId}`)
+);
+setShowEndModal(false);
+navigate('/dashboard');
     } catch (err) {
       console.error(err);
       setEndPasswordError("Submission failed. Network Error.");
@@ -793,7 +810,12 @@ export default function ExamWorkspace() {
                 // KICK OUT LOGIC
                 if (violationCount >= MAX_VIOLATIONS) {
                   api.post(`/exam/${examId}/submit`, { answers, autoSubmit: true })
-                    .then(() => navigate('/dashboard'))
+  .then(() => {
+    ['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
+      localStorage.removeItem(`scope_${key}_${examId}`)
+    );
+    navigate('/dashboard');
+  })
                     .catch(() => navigate('/dashboard')); // Force out even if network fails
                   return;
                 }
@@ -851,6 +873,11 @@ export default function ExamWorkspace() {
             </p>
           </div>
         </div>
+        {!isOnline && (
+  <span className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-bold mr-3">
+    ⚠️ Offline — answers saved locally
+  </span>
+)}
         <button onClick={handleFinishClick} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition-all">
           Finish Exam
         </button>

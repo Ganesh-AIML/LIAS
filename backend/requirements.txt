@@ -10,6 +10,5 @@ pydantic-settings
 python-socketio
 python-engineio
 aiohttp
-python-jose[cryptography]
 PyJWT
 slowapi

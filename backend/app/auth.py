@@ -69,23 +69,24 @@ def verify_session_guard(
 
 
 def verify_socket_token(token: str, exam_id: str):
-    """
-    Validates a WebSocket session by session_secret.
-    Uses an explicit db.close() in finally to prevent connection leaks (Issue 8).
-    """
-    from app.database import SessionLocal
+    """Validates WebSocket connection using JWT instead of session_secret."""
+    try:
+        payload = jwt.decode(token, SECRET_SIGNING_KEY, algorithms=[ALGORITHM])
+        session_id = payload.get("session_id")
+        token_exam_id = payload.get("exam_id")
+        if not session_id or token_exam_id != exam_id:
+            return None
+    except jwt.PyJWTError:
+        return None
 
+    from app.database import SessionLocal
     db = SessionLocal()
     try:
-        session = (
-            db.query(ExamSession)
-            .filter(
-                ExamSession.session_secret == token,
-                ExamSession.exam_id == exam_id,
-                ExamSession.is_revoked == False,  # noqa: E712
-            )
-            .first()
-        )
+        session = db.query(ExamSession).filter(
+            ExamSession.id == session_id,
+            ExamSession.exam_id == exam_id,
+            ExamSession.is_revoked == False,
+        ).first()
         return session
     finally:
-        db.close()  # Issue 5 & 8: guaranteed cleanup
+        db.close()

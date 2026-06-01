@@ -9,7 +9,7 @@ import bcrypt
 from app.database import get_db
 from app.models import TokenRegistry, ExamSession
 from app.auth import create_session_jwt, verify_session_guard
-from app.main import limiter
+from app.limiter import limiter
 import time
 
 router = APIRouter()
