@@ -153,7 +153,13 @@ useEffect(() => {
     if (dashboardHeartbeatRef.current) {
       clearInterval(dashboardHeartbeatRef.current);
       dashboardHeartbeatRef.current = setInterval(() => {
-        // re-fetch on next tick — rawAvailableTests state drives bucket recalculation via the other useEffect
+        api.get('/exam/student/available-tests')
+          .then(response => {
+            const { availableTests, pastResults } = response.data.data || response.data;
+            setRawAvailableTests(availableTests || []);
+            setRawPastResults(pastResults || []);
+          })
+          .catch(err => console.error('[heartbeat] refresh failed:', err));
       }, 60000);
     }
     setIsRefreshing(true);
@@ -211,7 +217,7 @@ useEffect(() => {
     setIsVerifying(true);
     setStartPasswordError('');
     try {
-      await violationApi.post(`/exam/${selectedTestId}/verify-password`, { type: 'start', password: startPasswordInput });
+      await api.post(`/exam/${selectedTestId}/verify-password`, { type: 'start', password: startPasswordInput });
       setShowStartModal(false);
       navigate(`/workspace/${selectedTestId}`);
     } catch (error) {

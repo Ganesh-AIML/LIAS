@@ -466,3 +466,141 @@ def revoke_session(
     session.is_revoked = True
     db.commit()
     return {"success": True, "message": f"Session {session_id} revoked."}
+
+
+
+# ── LINK GENERATION ────────────────────────────────────────────────────────────
+
+class GenerateLinksPayload(BaseModel):
+    student_tokens: List[str]
+
+    @field_validator("student_tokens")
+    @classmethod
+    def tokens_not_empty(cls, v):
+        if not v:
+            raise ValueError("At least one token is required.")
+        return v
+
+
+@router.post("/exams/{exam_id}/generate-links")
+def generate_links(
+    exam_id: str,
+    payload: GenerateLinksPayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    For each token in the request, validate it belongs to this exam and
+    return a pre-filled login URL. FRONTEND_BASE_URL is read from env —
+    never hardcoded.
+    """
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+
+    links = []
+    not_found = []
+
+    for token in payload.student_tokens:
+        record = (
+            db.query(TokenRegistry)
+            .filter(
+                TokenRegistry.token   == token,
+                TokenRegistry.exam_id == exam_id,
+            )
+            .first()
+        )
+        if not record:
+            not_found.append(token)
+            continue
+        links.append({
+            "student_id": record.student_id,
+            "token":      token,
+            "link":       f"{frontend_base}/?token={token}&exam={exam_id}",
+        })
+
+    return {
+        "success":   True,
+        "links":     links,
+        "not_found": not_found,
+    }
+
+
+# ── EXAM ANALYTICS ─────────────────────────────────────────────────────────────
+
+@router.get("/exams/{exam_id}/analytics")
+def get_exam_analytics(
+    exam_id: str,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Single-query analytics for a completed exam.
+    Returns enrolled count, submitted count, per-student violation breakdown.
+    No N+1 — all violation data fetched in one GROUP BY query.
+    """
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
+
+    sessions = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.exam_id    == exam_id,
+            ExamSession.is_revoked == False,  # noqa: E712
+        )
+        .all()
+    )
+
+    session_ids = [s.id for s in sessions]
+    session_map = {s.id: s for s in sessions}
+
+    # Single GROUP BY query — no N+1
+    violation_rows = (
+        db.query(
+            ViolationLog.session_id,
+            ViolationLog.event_type,
+            func.count(ViolationLog.id).label("cnt"),
+        )
+        .filter(ViolationLog.session_id.in_(session_ids))
+        .group_by(ViolationLog.session_id, ViolationLog.event_type)
+        .all()
+    )
+
+    # Build per-session violation dict
+    viol_by_session: dict = {}
+    for row in violation_rows:
+        if row.session_id not in viol_by_session:
+            viol_by_session[row.session_id] = {}
+        viol_by_session[row.session_id][row.event_type] = row.cnt
+
+    # Aggregate overall breakdown
+    total_viol = 0
+    breakdown: dict = {}
+    student_rows = []
+    for s in sessions:
+        detail    = viol_by_session.get(s.id, {})
+        total_s   = sum(detail.values())
+        total_viol += total_s
+        for ev, cnt in detail.items():
+            breakdown[ev] = breakdown.get(ev, 0) + cnt
+        student_rows.append({
+            "student_id":       s.student_id,
+            "submitted":        s.is_submitted,
+            "joined_at":        s.created_at,
+            "total_violations": total_s,
+            "violation_detail": detail,
+        })
+
+    return {
+        "success": True,
+        "data": {
+            "exam_id":             exam_id,
+            "title":               exam.title,
+            "total_enrolled":      enrolled,
+            "total_submitted":     sum(1 for s in sessions if s.is_submitted),
+            "total_violations":    total_viol,
+            "violation_breakdown": breakdown,
+            "students":            student_rows,
+        },
+    }

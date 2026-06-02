@@ -219,6 +219,8 @@ def submit_exam(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
+    if active_session.is_submitted:
+        raise HTTPException(status_code=400, detail="Exam already submitted.")
     active_session.is_submitted = True
     db.commit()
     return {"success": True, "message": "Exam submitted securely."}

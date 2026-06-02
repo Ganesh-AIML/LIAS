@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 // Module-level singleton — shared across all components that call useTrueTime().
 // The sync fires exactly once per page load, not once per component mount.
 let _syncPromise = null;
@@ -24,8 +25,6 @@ function getSyncPromise() {
 
   return _syncPromise;
 }
-
-import { useState, useEffect } from 'react';
 
 export function useTrueTime() {
   const [isSynced, setIsSynced] = useState(_isSynced);

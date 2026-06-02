@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../services/api';
@@ -11,6 +11,18 @@ export default function StudentAuth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const setAuthSession = useAuthStore((state) => state.setAuthSession);
+  // Pre-fill token from URL param (?token=LIAS_Ganesh&exam=exam_789)
+// Allows students to click a generated link and go straight to password entry.
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get('token');
+
+  if (urlToken) {
+    setToken(urlToken);
+  }
+
+  // exam param is informational — actual exam_id comes from server after auth
+}, []);
   const navigate = useNavigate();
 
   const handleJoin = async (e) => {

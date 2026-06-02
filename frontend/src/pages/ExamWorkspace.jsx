@@ -89,10 +89,15 @@ export default function ExamWorkspace() {
     return cached ? JSON.parse(cached) : {};
   });
   
-  const [savedCodes, _setSavedCodes] = useState(() => {
-    const cached = localStorage.getItem(`scope_codes_${examId}`);
-    return cached ? JSON.parse(cached) : {};
-  });
+  useEffect(() => {
+    if (Object.keys(savedCodes).length > 0) {
+      try {
+        localStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
+      } catch (e) {
+        console.warn('Storage quota exceeded — code not cached locally', e);
+      }
+    }
+  }, [savedCodes, examId]);
 
   const [language, setLanguage] = useState(() => {
     return localStorage.getItem(`scope_active_lang_${examId}`) || '71';
@@ -150,6 +155,21 @@ useEffect(() => {
   const [consoleHeight, setConsoleHeight] = useState(250); 
   const [isResizing, setIsResizing] = useState(false);
 
+  const flatQuestions = React.useMemo(
+    () => examData?.sections?.flatMap(s => s.questions || []) || [],
+    [examData]
+  );
+
+  const groupedQuestions = React.useMemo(
+    () => flatQuestions.reduce((acc, q, idx) => {
+      const sName = q.sectionName || 'General Section';
+      if (!acc[sName]) acc[sName] = [];
+      acc[sName].push({ ...q, globalIndex: idx });
+      return acc;
+    }, {}),
+    [flatQuestions]
+  );
+
   // 🛡️ AUTO-SAVE: Cache answers and source code
   // Issue 29: wrapped in try/catch — sessionStorage has a 5-10MB limit; silent failure loses answers
   useEffect(() => {
@@ -197,7 +217,9 @@ useEffect(() => {
     const socket = io(socketURL);
     // Issue 27: send JWT so server can authenticate the WebSocket session
     const jwt = useAuthStore.getState().sessionJwt;
-    socket.emit('join_exam_room', { exam_id: examId, token: jwt });
+    if (jwt) {
+      socket.emit('join_exam_room', { exam_id: examId, token: jwt });
+    }
     
     socket.on('exam_time_synced', (updatedTimes) => {
       setExamData((prevData) => {
@@ -473,17 +495,10 @@ navigate('/dashboard');
     document.addEventListener('mouseup', onMouseUp);
   };
 
-  const renderMCQSection = (questions, currentIndex, setIndex) => {
-    if (!questions || questions.length === 0) return <div className="p-10 text-center">No questions loaded.</div>;
-    const currentQ = questions[currentIndex];
+  const renderMCQSection = (currentIndex, setIndex) => {
+    if (!flatQuestions || flatQuestions.length === 0) return <div className="p-10 text-center">No questions loaded.</div>;
+    const currentQ = flatQuestions[currentIndex];
     if (!currentQ) return null;
-
-    const groupedQuestions = questions.reduce((acc, q, idx) => {
-      const sName = q.sectionName || "General Section";
-      if (!acc[sName]) acc[sName] = [];
-      acc[sName].push({ ...q, globalIndex: idx });
-      return acc;
-    }, {});
 
     return (
       <div className="flex flex-col md:flex-row h-[calc(100vh-120px)] bg-slate-50">
@@ -921,7 +936,7 @@ navigate('/dashboard');
 
       <main className="flex-1 overflow-hidden">
         {activeSection === 'coding' && renderCodingSection()}
-        {activeSection === 'technical' && renderMCQSection(examData?.sections?.flatMap(s => s.questions || []) || [], currentTechQ, setCurrentTechQ)}
+        {activeSection === 'technical' && renderMCQSection(currentTechQ, setCurrentTechQ)}
       </main>
 
       {showLockModal && (

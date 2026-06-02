@@ -5,7 +5,7 @@ import socketio
 import bcrypt
 import time
 from app.routes import auth, exam, admin as admin_routes
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from slowapi import _rate_limit_exceeded_handler
@@ -14,7 +14,6 @@ from app.limiter import limiter
 
 from app.database import Base, engine, SessionLocal
 from app.models import Exam, TokenRegistry
-from app.routes import auth, exam
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
@@ -102,7 +101,7 @@ fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins     = ALLOWED_ORIGINS,
     allow_credentials = True,
-    allow_methods     = ["GET", "POST", "PUT"],
+    allow_methods     = ["GET", "POST", "PUT", "DELETE"],
     allow_headers     = ["Content-Type", "Authorization"],
 )
 
@@ -131,21 +130,6 @@ async def join_exam_room(sid, data):
         return
     await sio.enter_room(sid, exam_id)
 
-
-@fastapi_app.post("/admin/exam/{exam_id}/update-time", tags=["Admin Controls"])
-async def update_exam_time(
-    exam_id: str,
-    new_duration: int,
-    x_admin_token: str = Header(None),
-):
-    if (
-        not ADMIN_SECRET
-        or not x_admin_token
-        or not secrets.compare_digest(x_admin_token, ADMIN_SECRET)
-    ):
-        raise HTTPException(status_code=403, detail="Unauthorized")
-    await sio.emit("exam_time_synced", {"duration": new_duration}, room=exam_id)
-    return {"success": True}
 
 
 # Export the ASGI app (Socket.IO wraps FastAPI)
