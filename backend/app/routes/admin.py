@@ -361,3 +361,59 @@ def delete_student(token: str, _: bool = Depends(verify_admin), db: Session = De
     db.query(TokenRegistry).filter(TokenRegistry.token == token).delete()
     db.commit()
     return {"success": True}
+
+# ── REPLACE YOUR GET /exams ROUTE WITH THIS ─────────────────────────────────
+@router.get("/exams")
+def list_exams(
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Return all exams with real-time computed status, respecting drafts."""
+    exams = db.query(Exam).all()
+    now = time.time()
+    
+    active_sessions = db.query(ExamSession.exam_id, ExamSession.is_submitted).filter(
+        ExamSession.is_revoked == False
+    ).all()
+    
+    counts_map = {}
+    for session in active_sessions:
+        if session.exam_id not in counts_map:
+            counts_map[session.exam_id] = {"total": 0, "submitted": 0}
+        counts_map[session.exam_id]["total"] += 1
+        if session.is_submitted:
+            counts_map[session.exam_id]["submitted"] += 1
+
+    result = []
+    for exam in exams:
+        # FIX: Explicitly check for draft status first!
+        if exam.status == "draft":
+            computed_status = "draft"
+        else:
+            end_at = exam.starts_at + exam.duration_seconds
+            if exam.starts_at > now:
+                computed_status = "upcoming"
+            elif now <= end_at:
+                computed_status = "live"
+            else:
+                computed_status = "completed"
+
+        stats = counts_map.get(exam.id, {"total": 0, "submitted": 0})
+        
+        result.append({
+            "id":               exam.id,
+            "title":            exam.title,
+            "duration_minutes": exam.duration_seconds // 60,
+            "starts_at_ms":     exam.starts_at * 1000,
+            "status":           computed_status,
+            "participants":     stats["total"],
+            "submitted":        stats["submitted"],
+        })
+    return {"success": True, "data": result}
+
+# ── ADD THIS RIGHT BELOW IT (To allow deleting tests) ──────────────────────
+@router.delete("/exams/{exam_id}")
+def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    db.query(Exam).filter(Exam.id == exam_id).delete()
+    db.commit()
+    return {"success": True}

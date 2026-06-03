@@ -3,13 +3,16 @@ import json
 import bcrypt
 import logging
 from typing import Literal
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
+
 from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry
+# 🚀 Expanded imports to hook onto content models
+from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase
 from app.limiter import limiter
 
 router = APIRouter()
@@ -32,12 +35,11 @@ class SubmitPayload(BaseModel):
 
 
 class PasswordVerifyPayload(BaseModel):
-    # Issue 16: Literal type — rejects any value other than 'start' or 'end'
     type:     Literal["start", "end"]
     password: str
 
 
-# ── VIOLATION ROUTES — must be above /{exam_id} to avoid route conflict ──
+# ── VIOLATION ROUTES ───────────────────────────────────────────────────────────
 
 @router.post("/violation")
 def log_violation(
@@ -65,7 +67,6 @@ def get_violation_count(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
-    # Issue 14: single GROUP BY query instead of N+1 loop
     results = (
         db.query(ViolationLog.event_type, func.count(ViolationLog.id))
         .filter(ViolationLog.session_id == active_session.id)
@@ -81,14 +82,13 @@ def get_violation_count(
     return {"success": True, "count": total, "breakdown": breakdown}
 
 
-# ── DASHBOARD FEED ──
+# ── DASHBOARD FEED ─────────────────────────────────────────────────────────────
 
 @router.get("/student/available-tests")
 def get_available_tests(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
-    # Issue 12: real student data from DB instead of hardcoded placeholder
     token_record = (
         db.query(TokenRegistry)
         .filter(
@@ -100,7 +100,6 @@ def get_available_tests(
     if not token_record:
         raise HTTPException(status_code=404, detail="Student record not found.")
 
-    # Single query — exam_id is already known from token_record
     exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
 
     return {
@@ -129,7 +128,7 @@ def get_available_tests(
     }
 
 
-# ── EXAM WORKSPACE FEED ──
+# ── UPDATED EXAM WORKSPACE FEED: 100% DATABASE DRIVEN ──────────────────────────
 
 @router.get("/{exam_id}")
 def load_exam_workspace(
@@ -137,52 +136,68 @@ def load_exam_workspace(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
-    # Issue 13 note: questions are still static — replace with DB-driven content
-    # when the Questions/Options tables are added.
+    """
+    Fetches real dynamic exam content (MCQs & Coding Problems) from the database
+    to construct the workspace payload for the candidate session.
+    """
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
+    # 1. Fetch dynamic questions and coding tasks attached to this test ID
+    db_questions = db.query(Question).filter(Question.exam_id == exam_id).all()
+    db_coding    = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+
+    # 2. Map and group questions by their custom section name dynamically
+    sections_map = defaultdict(list)
+    for q in db_questions:
+        sections_map[q.section].append({
+            "id":              q.id,
+            "text":            q.text,
+            "shuffledOptions": [
+                {"label": "A", "text": q.optA},
+                {"label": "B", "text": q.optB},
+                {"label": "C", "text": q.optC},
+                {"label": "D", "text": q.optD},
+            ]
+        })
+
+    # Transform grouped map back into structured array matching workspace layout
+    formatted_sections = []
+    for section_name, questions_list in sections_map.items():
+        formatted_sections.append({
+            "name":      section_name,
+            "category":  "Technical" if "tech" in section_name.lower() else "Aptitude",
+            "questions": questions_list
+        })
+
+    # 3. Format coding tasks for compilation testing
+    formatted_coding = []
+    for cp in db_coding:
+        formatted_coding.append({
+            "id":          cp.id,
+            "title":       cp.title,
+            "description": cp.description,
+            "constraints": cp.constraints or "",
+            "marks":       10  # Standard point allocation weight
+        })
+
     return {
         "success": True,
         "data": {
-            "id":       exam_record.id,
-            "title":    exam_record.title,
-            "date":     exam_record.starts_at * 1000,
-            "duration": exam_record.duration_seconds // 60,
-            "maxViolations": 3,
-            "codingProblems": [
-                {
-                    "id":          "code_1",
-                    "title":       "Data Structures Integrity",
-                    "description": "Write a function to validate a binary search tree.\n\n**Input:** Root node of tree\n**Output:** Boolean",
-                    "marks":       10,
-                }
-            ],
-            "sections": [
-                {
-                    "name":      "Technical Validation",
-                    "category":  "Technical",
-                    "questions": [
-                        {
-                            "id":              "mcq_1",
-                            "text":            "What is the time complexity of binary search?",
-                            "shuffledOptions": [
-                                {"label": "A", "text": "O(log n)"},
-                                {"label": "B", "text": "O(n)"},
-                                {"label": "C", "text": "O(n log n)"},
-                                {"label": "D", "text": "O(1)"},
-                            ],
-                        }
-                    ],
-                }
-            ],
+            "id":             exam_record.id,
+            "title":          exam_record.title,
+            "date":           exam_record.starts_at * 1000,
+            "duration":       exam_record.duration_seconds // 60,
+            "maxViolations":  3,
+            "codingProblems": formatted_coding,
+            "sections":       formatted_sections,
         },
     }
 
 
 @router.post("/{exam_id}/verify-password")
-@limiter.limit("10/minute")  # Issue 15: brute-force protection on exam passwords
+@limiter.limit("10/minute")
 def verify_exam_password(
     request:        Request,
     exam_id:        str,
@@ -204,7 +219,6 @@ def verify_exam_password(
         payload.password.encode("utf-8"),
         target_hash.encode("utf-8"),
     ):
-        # Issue 16: payload.type is now a Literal — safe to use in detail message
         raise HTTPException(
             status_code=403,
             detail=f"Incorrect {payload.type.capitalize()} Password.",
@@ -213,6 +227,8 @@ def verify_exam_password(
     return {"success": True}
 
 
+# ── UPDATED SUBMIT ROUTE: PERSISTS REAL TELEMETRY RESPONSE DATA ──────────────
+
 @router.post("/{exam_id}/submit")
 def submit_exam(
     exam_id:        str,
@@ -220,13 +236,16 @@ def submit_exam(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
+    """
+    Finalizes the candidate session and saves response data arrays securely 
+    to the centralized database column for automated evaluation grading.
+    """
     if active_session.is_submitted:
-        # Prevent re-submission overwriting
         raise HTTPException(status_code=400, detail="Exam already submitted.")
-
-    # 🚀 Save the raw answers JSON into the session record
+        
+    # 🚀 Crucial Fix: Saves live response telemetry to feed the grading analytics engines
     active_session.submission_payload = json.dumps(payload.answers)
     active_session.is_submitted = True
     
     db.commit()
-    return {"success": True, "message": "Exam submitted successfully"}
+    return {"success": True, "message": "Exam submitted securely."}
