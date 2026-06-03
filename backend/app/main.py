@@ -10,21 +10,20 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.limiter import limiter
 
+# ... (keep your existing imports and configuration at the top) ...
+
 from app.database import Base, engine, SessionLocal
-from app.models import Exam, TokenRegistry
+# CRITICAL FIX: Explicitly import ALL models so metadata knows about them
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
-
-# 1. REMOVED seed_database() function completely.
-# The database will now strictly rely on Admin inputs.
 
 fastapi_app = FastAPI(title="S.C.O.P.E. Assessment Gateway", version="2.0.0")
 
 fastapi_app.state.limiter = limiter
 fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Allowed origins and headers configured for Admin + Student portals
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins     = os.getenv("ALLOWED_ORIGINS", "").split(","),
@@ -36,6 +35,11 @@ fastapi_app.add_middleware(
 fastapi_app.include_router(auth.router,         prefix="/auth",  tags=["Auth"])
 fastapi_app.include_router(exam.router,         prefix="/exam",  tags=["Exam"])
 fastapi_app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
+
+# ── ROOT FIX: Create tables synchronously on module load ──
+logger.info("🚀 Initializing S.C.O.P.E. Database Tables...")
+Base.metadata.create_all(bind=engine)
+# ──────────────────────────────────────────────────────────
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=os.getenv("ALLOWED_ORIGINS", "").split(","))
 
@@ -56,11 +60,5 @@ async def join_exam_room(sid, data):
         return
     await sio.enter_room(sid, exam_id)
 
-@fastapi_app.on_event("startup")
-def startup_event():
-    # 2. Ensure tables exist, but do NOT seed data.
-    logger.info("🚀 Starting S.C.O.P.E. Backend. Database connection initialized.")
-    Base.metadata.create_all(bind=engine)
-
-# Mount Socket.IO to FastAPI
-fastapi_app.mount("/", socketio.ASGIApp(sio))
+# ── IMPORTANT: Define 'app' for Uvicorn/Render to target ──
+app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
