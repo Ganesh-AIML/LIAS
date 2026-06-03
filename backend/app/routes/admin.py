@@ -104,16 +104,31 @@ class TimeSyncPayload(BaseModel):
     new_duration_minutes: int
 
 
-# ── EXAM MANAGEMENT ────────────────────────────────────────────────────────────
+# --- OPTIMIZATION: REWRITE /exams TO ELIMINATE N+1 QUERIES ---
 
 @router.get("/exams")
 def list_exams(
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
-    """Return all exams with participant count and real-time computed status."""
+    """Return all exams with participant count and real-time computed status. Optimized for O(1) queries."""
     exams = db.query(Exam).all()
     now = time.time()
+    
+    # Bulk fetch all active sessions in one query
+    active_sessions = db.query(ExamSession.exam_id, ExamSession.is_submitted).filter(
+        ExamSession.is_revoked == False
+    ).all()
+    
+    # Aggregate data in Python memory
+    counts_map = {}
+    for session in active_sessions:
+        if session.exam_id not in counts_map:
+            counts_map[session.exam_id] = {"total": 0, "submitted": 0}
+        counts_map[session.exam_id]["total"] += 1
+        if session.is_submitted:
+            counts_map[session.exam_id]["submitted"] += 1
+
     result = []
     for exam in exams:
         end_at = exam.starts_at + exam.duration_seconds
@@ -124,30 +139,67 @@ def list_exams(
         else:
             computed_status = "completed"
 
-        participant_count = (
-            db.query(func.count(ExamSession.id))
-            .filter(
-                ExamSession.exam_id == exam.id,
-                ExamSession.is_revoked == False,  # noqa: E712
-            )
-            .scalar()
-        )
-        submitted_count = (
-            db.query(func.count(ExamSession.id))
-            .filter(
-                ExamSession.exam_id == exam.id,
-                ExamSession.is_submitted == True,  # noqa: E712
-            )
-            .scalar()
-        )
+        stats = counts_map.get(exam.id, {"total": 0, "submitted": 0})
+        
         result.append({
             "id":               exam.id,
             "title":            exam.title,
             "duration_minutes": exam.duration_seconds // 60,
             "starts_at_ms":     exam.starts_at * 1000,
             "status":           computed_status,
-            "participants":     participant_count,
-            "submitted":        submitted_count,
+            "participants":     stats["total"],
+            "submitted":        stats["submitted"],
+        })
+    return {"success": True, "data": result}
+
+
+# --- OPTIMIZATION: REWRITE /students TO ELIMINATE N+1 QUERIES ---
+
+@router.get("/students")
+def list_students(
+    exam_id: Optional[str] = None,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Optimized to fetch all students and their session states without a query loop."""
+    query = db.query(TokenRegistry)
+    if exam_id:
+        query = query.filter(TokenRegistry.exam_id == exam_id)
+    records = query.all()
+
+    if not records:
+        return {"success": True, "data": []}
+
+    student_ids = [r.student_id for r in records]
+    
+    # Fetch all relevant sessions in one bulk query
+    sessions = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.student_id.in_(student_ids),
+            ExamSession.is_revoked == False
+        )
+        .order_by(ExamSession.created_at.desc())
+        .all()
+    )
+    
+    # Map by tuple (student_id, exam_id) to get the most recent valid session
+    session_map = {}
+    for s in sessions:
+        key = (s.student_id, s.exam_id)
+        if key not in session_map:
+            session_map[key] = s
+
+    result = []
+    for r in records:
+        session = session_map.get((r.student_id, r.exam_id))
+        result.append({
+            "token":      r.token,
+            "student_id": r.student_id,
+            "exam_id":    r.exam_id,
+            "is_active":  r.is_active,
+            "submitted":  session.is_submitted if session else False,
+            "session_id": session.id if session else None,
         })
     return {"success": True, "data": result}
 
@@ -281,7 +333,7 @@ async def sync_exam_time(
     return {"success": True, "message": "Time synced to all live students."}
 
 
-# ── STUDENT MANAGEMENT ─────────────────────────────────────────────────────────
+# --- OPTIMIZATION: REWRITE /students TO ELIMINATE N+1 QUERIES ---
 
 @router.get("/students")
 def list_students(
@@ -289,23 +341,38 @@ def list_students(
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
+    """Optimized to fetch all students and their session states without a query loop."""
     query = db.query(TokenRegistry)
     if exam_id:
         query = query.filter(TokenRegistry.exam_id == exam_id)
     records = query.all()
 
+    if not records:
+        return {"success": True, "data": []}
+
+    student_ids = [r.student_id for r in records]
+    
+    # Fetch all relevant sessions in one bulk query
+    sessions = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.student_id.in_(student_ids),
+            ExamSession.is_revoked == False
+        )
+        .order_by(ExamSession.created_at.desc())
+        .all()
+    )
+    
+    # Map by tuple (student_id, exam_id) to get the most recent valid session
+    session_map = {}
+    for s in sessions:
+        key = (s.student_id, s.exam_id)
+        if key not in session_map:
+            session_map[key] = s
+
     result = []
     for r in records:
-        session = (
-            db.query(ExamSession)
-            .filter(
-                ExamSession.student_id == r.student_id,
-                ExamSession.exam_id    == r.exam_id,
-                ExamSession.is_revoked == False,  # noqa: E712
-            )
-            .order_by(ExamSession.created_at.desc())
-            .first()
-        )
+        session = session_map.get((r.student_id, r.exam_id))
         result.append({
             "token":      r.token,
             "student_id": r.student_id,
@@ -482,6 +549,8 @@ class GenerateLinksPayload(BaseModel):
         return v
 
 
+# --- ROUTING UPDATE: /generate-links ---
+
 @router.post("/exams/{exam_id}/generate-links")
 def generate_links(
     exam_id: str,
@@ -490,12 +559,9 @@ def generate_links(
     db: Session = Depends(get_db),
 ):
     """
-    For each token in the request, validate it belongs to this exam and
-    return a pre-filled login URL. FRONTEND_BASE_URL is read from env —
-    never hardcoded.
+    Returns pre-filled login URLs. Points to the new /join path.
     """
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
-
     links = []
     not_found = []
 
@@ -514,7 +580,8 @@ def generate_links(
         links.append({
             "student_id": record.student_id,
             "token":      token,
-            "link":       f"{frontend_base}/?token={token}&exam={exam_id}",
+            # UPDATE: This now correctly targets the /join route
+            "link":       f"{frontend_base}/join?token={token}&exam={exam_id}",
         })
 
     return {
@@ -522,6 +589,14 @@ def generate_links(
         "links":     links,
         "not_found": not_found,
     }
+
+
+# --- ADD THIS NEW ENDPOINT FOR EXPLICIT LOGIN VALIDATION ---
+
+@router.get("/verify")
+def verify_admin_login(_: bool = Depends(verify_admin)):
+    """Explicit endpoint used by the frontend to validate the X-Admin-Token."""
+    return {"success": True, "message": "Admin verified"}
 
 
 # ── EXAM ANALYTICS ─────────────────────────────────────────────────────────────

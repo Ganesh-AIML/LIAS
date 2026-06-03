@@ -101,8 +101,8 @@ fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins     = ALLOWED_ORIGINS,
     allow_credentials = True,
-    allow_methods     = ["GET", "POST", "PUT", "DELETE"],
-    allow_headers     = ["Content-Type", "Authorization"],
+    allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Added OPTIONS just in case
+    allow_headers     = ["Content-Type", "Authorization", "X-Admin-Token"], # <--- Added X-Admin-Token
 )
 
 fastapi_app.include_router(auth.router,         prefix="/auth",  tags=["Auth"])

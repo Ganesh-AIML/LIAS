@@ -11,42 +11,44 @@ import AdminDashboard  from './pages/admin/AdminDashboard';
 
 const ProtectedRoute = ({ children }) => {
   const sessionJwt = useAuthStore((state) => state.sessionJwt);
-  if (!sessionJwt) return <Navigate to="/" replace />;
+  if (!sessionJwt) return <Navigate to="/join" replace />;
   return children;
 };
 
 const PreCheckRoute = ({ children }) => {
   const { sessionJwt, preCheckPassed } = useAuthStore();
-  if (!sessionJwt)      return <Navigate to="/"         replace />;
+  if (!sessionJwt)      return <Navigate to="/join"     replace />;
   if (!preCheckPassed)  return <Navigate to="/precheck" replace />;
   return children;
 };
 
 export default function App() {
   return (
-  <ErrorBoundary>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<StudentAuth />} />
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          {/* Admin is now the default landing page */}
+          <Route path="/" element={<AdminDashboard />} />
 
-        <Route path="/precheck" element={
-          <ProtectedRoute><PreExamCheck /></ProtectedRoute>
-        } />
+          {/* Student flow starts here */}
+          <Route path="/join" element={<StudentAuth />} />
 
-        <Route path="/dashboard" element={
-          <ProtectedRoute><PreCheckRoute><StudentDashboard /></PreCheckRoute></ProtectedRoute>
-        } />
+          <Route path="/precheck" element={
+            <ProtectedRoute><PreExamCheck /></ProtectedRoute>
+          } />
 
-        <Route path="/workspace/:examId" element={
-          <ProtectedRoute><PreCheckRoute><ExamWorkspace /></PreCheckRoute></ProtectedRoute>
-        } />
+          <Route path="/dashboard" element={
+            <ProtectedRoute><PreCheckRoute><StudentDashboard /></PreCheckRoute></ProtectedRoute>
+          } />
 
-        {/* Admin — standalone, no JWT guard, uses its own token gate */}
-        <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/workspace/:examId" element={
+            <ProtectedRoute><PreCheckRoute><ExamWorkspace /></PreCheckRoute></ProtectedRoute>
+          } />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
-</ErrorBoundary>
+          {/* Catch-all sends unknown traffic to student join page */}
+          <Route path="*" element={<Navigate to="/join" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

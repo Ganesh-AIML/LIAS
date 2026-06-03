@@ -25,14 +25,15 @@ function AdminLoginGate({ onSuccess }) {
     setIsLoading(true);
     setError('');
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/admin/exams`, {
+      // Hits the newly created explicit verify endpoint
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/admin/verify`, {
         headers: { 'X-Admin-Token': token.trim() },
       });
       if (res.ok) {
         sessionStorage.setItem('lias_admin_token', token.trim());
         onSuccess();
       } else {
-        setError('Invalid admin token.');
+        setError('Invalid admin credentials.');
       }
     } catch {
       setError('Cannot reach server. Check your connection.');
@@ -42,35 +43,38 @@ function AdminLoginGate({ onSuccess }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8 border border-slate-200">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center">
-            <Shield size={22} className="text-white" />
+    <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-4 font-sans">
+      <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-xl border border-slate-200">
+        <div className="text-center mb-8">
+          <div className="w-12 h-12 bg-cyan-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+            <Shield size={26} className="text-white" />
           </div>
-          <div>
-            <h1 className="text-xl font-black text-slate-900">LIAS Admin</h1>
-            <p className="text-xs text-slate-500 font-medium">Secure Control Panel</p>
-          </div>
+          <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">LIAS Admin</h1>
+          <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Secure Control Panel</p>
         </div>
+        
         {error && (
-          <p className="text-sm text-red-500 font-bold mb-4 bg-red-50 p-3 rounded-lg">{error}</p>
+          <div className="bg-rose-50 text-rose-500 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>
         )}
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div className="relative">
-            <Lock size={16} className="absolute left-3 top-3 text-slate-400" />
-            <input
-              type="password"
-              placeholder="Admin token"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:border-cyan-500"
-            />
+        
+        <form onSubmit={handleLogin} className="space-y-5">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Admin Token</label>
+            <div className="relative">
+              <Lock size={18} className="absolute left-3 top-3 text-slate-400" />
+              <input
+                type="password"
+                required
+                value={token}
+                onChange={e => setToken(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#06B6D4] outline-none"
+              />
+            </div>
           </div>
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg text-sm transition-colors"
+            className="w-full bg-[#06B6D4] hover:bg-cyan-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg shadow-md mt-4 transition-colors"
           >
             {isLoading ? 'Verifying...' : 'Enter Control Panel'}
           </button>
