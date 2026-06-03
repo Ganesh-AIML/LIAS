@@ -1,12 +1,14 @@
 import time
 from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Float, Text
+from sqlalchemy.orm import relationship
 from app.database import Base
 
+# ── 1. EXISTING TABLES (With Relationship Hooks Added) ─────────────────────────
 
 class TokenRegistry(Base):
     __tablename__ = "token_registry"
     token         = Column(String, primary_key=True, index=True)
-    exam_id       = Column(String, nullable=False)
+    exam_id       = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
     student_id    = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
     is_active     = Column(Boolean, default=True)
@@ -20,30 +22,82 @@ class Exam(Base):
     starts_at           = Column(Float, nullable=False)
     start_password_hash = Column(String, nullable=False)
     end_password_hash   = Column(String, nullable=True)
+    status              = Column(String, default="upcoming") # draft, upcoming, live, completed
 
+    # Relationships - If Exam is deleted, delete all associated content
+    questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")
+    coding_problems = relationship("CodingProblem", back_populates="exam", cascade="all, delete-orphan")
+    sessions        = relationship("ExamSession", back_populates="exam", cascade="all, delete-orphan")
 
 class ExamSession(Base):
     __tablename__ = "exam_sessions"
-    id             = Column(String, primary_key=True, index=True)
-    student_id     = Column(String, nullable=False)
-    exam_id        = Column(String, ForeignKey("exams.id"), nullable=False)
-    session_secret = Column(String, nullable=False)
-    is_revoked     = Column(Boolean, default=False)
-    is_submitted   = Column(Boolean, default=False)
-    created_at     = Column(Float, default=time.time)  # Issue 17: audit timestamp
+    id                 = Column(String, primary_key=True, index=True)
+    student_id         = Column(String, nullable=False)
+    exam_id            = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
+    session_secret     = Column(String, nullable=False)
+    is_revoked         = Column(Boolean, default=False)
+    is_submitted       = Column(Boolean, default=False)
+    created_at         = Column(Float, default=time.time)
+    
+    submission_payload = Column(Text, nullable=True) 
+
+    exam = relationship("Exam", back_populates="sessions")
+    violations = relationship("ViolationLog", back_populates="session", cascade="all, delete-orphan")
 
 
 class ViolationLog(Base):
-    """
-    Persistent server-side record of every proctoring event.
-    Client-side guards are UX only — this is the source of truth.
-    occurred_at is always server time (time.time()), not client-reported.
-    """
     __tablename__ = "violation_logs"
     id          = Column(Integer, primary_key=True, autoincrement=True)
-    session_id  = Column(String, ForeignKey("exam_sessions.id"), nullable=False, index=True)
+    session_id  = Column(String, ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     student_id  = Column(String, nullable=False, index=True)
     exam_id     = Column(String, nullable=False)
     event_type  = Column(String, nullable=False)
-    occurred_at = Column(Float, nullable=False)   # server unix timestamp
     detail      = Column(Text, nullable=True)
+    occurred_at = Column(Float, default=time.time)
+
+    session = relationship("ExamSession", back_populates="violations")
+
+
+# ── 2. NEW TABLES (For Dynamic Exam Content) ───────────────────────────────────
+
+class Question(Base):
+    """Stores MCQs (Aptitude, Technical, etc.)"""
+    __tablename__ = "questions"
+    id       = Column(String, primary_key=True, index=True)
+    exam_id  = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
+    section  = Column(String, nullable=False) # e.g., 'Aptitude', 'Technical'
+    text     = Column(Text, nullable=False)
+    optA     = Column(String, nullable=False)
+    optB     = Column(String, nullable=False)
+    optC     = Column(String, nullable=False)
+    optD     = Column(String, nullable=False)
+    ans      = Column(String, nullable=False) # 'A', 'B', 'C', or 'D'
+    
+    exam = relationship("Exam", back_populates="questions")
+
+
+class CodingProblem(Base):
+    """Stores Programming Challenges"""
+    __tablename__ = "coding_problems"
+    id          = Column(String, primary_key=True, index=True)
+    exam_id     = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
+    title       = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    constraints = Column(Text, nullable=True)
+    # Store languages as a comma-separated string (e.g., "62,71,54" for Java, Python, C++)
+    languages   = Column(String, nullable=True) 
+    
+    exam       = relationship("Exam", back_populates="coding_problems")
+    test_cases = relationship("TestCase", back_populates="problem", cascade="all, delete-orphan")
+
+
+class TestCase(Base):
+    """Stores Inputs/Outputs for Code Execution"""
+    __tablename__ = "test_cases"
+    id              = Column(String, primary_key=True, index=True)
+    problem_id      = Column(String, ForeignKey("coding_problems.id", ondelete="CASCADE"), nullable=False)
+    input_data      = Column(Text, nullable=False)
+    expected_output = Column(Text, nullable=False)
+    is_hidden       = Column(Boolean, default=False)
+    
+    problem = relationship("CodingProblem", back_populates="test_cases")

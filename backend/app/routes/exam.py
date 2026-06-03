@@ -1,4 +1,5 @@
 import time
+import json
 import bcrypt
 import logging
 from typing import Literal
@@ -220,7 +221,12 @@ def submit_exam(
     db: Session     = Depends(get_db),
 ):
     if active_session.is_submitted:
+        # Prevent re-submission overwriting
         raise HTTPException(status_code=400, detail="Exam already submitted.")
+
+    # 🚀 Save the raw answers JSON into the session record
+    active_session.submission_payload = json.dumps(payload.answers)
     active_session.is_submitted = True
+    
     db.commit()
-    return {"success": True, "message": "Exam submitted securely."}
+    return {"success": True, "message": "Exam submitted successfully"}

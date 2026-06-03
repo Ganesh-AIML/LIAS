@@ -14,8 +14,7 @@ from app.limiter import limiter
 
 from app.database import Base, engine, SessionLocal
 # CRITICAL FIX: Explicitly import ALL models so metadata knows about them
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog 
-
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
 

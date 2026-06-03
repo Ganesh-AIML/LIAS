@@ -1,22 +1,22 @@
 import { useState, lazy, Suspense } from 'react';
-import { Shield, BookOpen, Users, Monitor, BarChart2, LogOut, Lock } from 'lucide-react';
+import { 
+  Shield, Users, Monitor, BarChart2, LogOut, Lock,
+  PlusCircle, LayoutDashboard
+} from 'lucide-react';
 
-const ExamManager    = lazy(() => import('./ExamManager'));
-const StudentManager = lazy(() => import('./StudentManager'));
-const LiveMonitor    = lazy(() => import('./LiveMonitor'));
-const ExamAnalytics  = lazy(() => import('./ExamAnalytics'));
+// We will port these files in the upcoming tasks. 
+// For now, they are lazy-loaded stubs.
+const AdminMainView       = lazy(() => import('./views/AdminMainView'));
+const ScheduleTest        = lazy(() => import('./views/ScheduleTest'));
+const LiveTestMonitor     = lazy(() => import('./views/LiveTestMonitor'));
+const UpcomingTestPreview = lazy(() => import('./views/UpcomingTestPreview'));
+const AnalyticsView       = lazy(() => import('./views/AnalyticsView'));
+const StudentDirectory    = lazy(() => import('./views/StudentDirectory'));
 
-const NAV = [
-  { id: 'exams',     label: 'Exam Manager', icon: BookOpen  },
-  { id: 'students',  label: 'Students',     icon: Users     },
-  { id: 'monitor',   label: 'Live Monitor', icon: Monitor   },
-  { id: 'analytics', label: 'Analytics',    icon: BarChart2 },
-];
-
-// ── LOGIN GATE ─────────────────────────────────────────────────────────────────
+// ── LOGIN GATE (Retained from previous phase) ─────────────────────────────────
 function AdminLoginGate({ onSuccess }) {
-  const [token, setToken]     = useState('');
-  const [error, setError]     = useState('');
+  const [token, setToken] = useState('');
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (e) => {
@@ -25,7 +25,6 @@ function AdminLoginGate({ onSuccess }) {
     setIsLoading(true);
     setError('');
     try {
-      // Hits the newly created explicit verify endpoint
       const res = await fetch(`${import.meta.env.VITE_API_URL}/admin/verify`, {
         headers: { 'X-Admin-Token': token.trim() },
       });
@@ -50,12 +49,10 @@ function AdminLoginGate({ onSuccess }) {
             <Shield size={26} className="text-white" />
           </div>
           <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">LIAS Admin</h1>
-          <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Secure Control Panel</p>
+          <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Unified Control Center</p>
         </div>
         
-        {error && (
-          <div className="bg-rose-50 text-rose-500 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>
-        )}
+        {error && <div className="bg-rose-50 text-rose-500 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>}
         
         <form onSubmit={handleLogin} className="space-y-5">
           <div>
@@ -71,11 +68,7 @@ function AdminLoginGate({ onSuccess }) {
               />
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-[#06B6D4] hover:bg-cyan-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg shadow-md mt-4 transition-colors"
-          >
+          <button type="submit" disabled={isLoading} className="w-full bg-[#06B6D4] hover:bg-cyan-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg shadow-md mt-4 transition-colors">
             {isLoading ? 'Verifying...' : 'Enter Control Panel'}
           </button>
         </form>
@@ -84,53 +77,116 @@ function AdminLoginGate({ onSuccess }) {
   );
 }
 
-// ── SHELL ──────────────────────────────────────────────────────────────────────
+// ── UNIFIED SHELL ──────────────────────────────────────────────────────────────
 export default function AdminDashboard() {
-  const [isAuthed, setIsAuthed]   = useState(!!sessionStorage.getItem('lias_admin_token'));
-  const [activeTab, setActiveTab] = useState('exams');
+  const [isAuthed, setIsAuthed] = useState(!!sessionStorage.getItem('lias_admin_token'));
+  
+  // Master State Machine (Modeled after SCOPE TnpDashboard)
+  const [currentView, setCurrentView] = useState('main'); // main, schedule, live, preview, analytics, directory
+  const [selectedExam, setSelectedExam] = useState(null);
+  const [editingDraft, setEditingDraft] = useState(null);
 
   if (!isAuthed) return <AdminLoginGate onSuccess={() => setIsAuthed(true)} />;
 
+  // Navigation Handlers
+  const goHome = () => {
+    setCurrentView('main');
+    setSelectedExam(null);
+    setEditingDraft(null);
+  };
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900">
+      {/* SCOPE-style Top Navbar */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-cyan-600 rounded-md flex items-center justify-center">
-                <Shield size={18} className="text-white" />
+            
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2 cursor-pointer" onClick={goHome}>
+                <div className="w-8 h-8 bg-cyan-600 rounded-md flex items-center justify-center">
+                  <Shield size={18} className="text-white" />
+                </div>
+                <h1 className="text-xl font-black tracking-tight text-slate-800">
+                  LIAS <span className="text-cyan-600">Admin</span>
+                </h1>
               </div>
-              <h1 className="text-xl font-bold tracking-tight">
-                LIAS <span className="text-cyan-600">Admin</span>
-              </h1>
-            </div>
-            <div className="flex items-center gap-1">
-              {NAV.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setActiveTab(id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === id ? 'bg-cyan-50 text-cyan-700 border border-cyan-200' : 'text-slate-600 hover:bg-slate-100'}`}
+
+              {/* Global Quick Actions */}
+              <div className="hidden md:flex items-center gap-2 border-l border-slate-200 pl-6">
+                <button 
+                  onClick={goHome}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${currentView === 'main' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}
                 >
-                  <Icon size={16} /> {label}
+                  <LayoutDashboard size={16} /> Dashboard
                 </button>
-              ))}
+                <button 
+                  onClick={() => setCurrentView('directory')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${currentView === 'directory' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}
+                >
+                  <Users size={16} /> Student Directory
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+               <button
+                  onClick={() => {
+                    setCurrentView('schedule');
+                    setEditingDraft(null);
+                  }}
+                  className="hidden sm:flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm"
+                >
+                  <PlusCircle size={16} /> Schedule Test
+                </button>
               <button
                 onClick={() => { sessionStorage.removeItem('lias_admin_token'); setIsAuthed(false); }}
-                className="ml-3 flex items-center gap-1.5 text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors"
               >
-                <LogOut size={15} /> Sign Out
+                <LogOut size={16} /> <span className="hidden sm:inline">Sign Out</span>
               </button>
             </div>
           </div>
         </div>
       </nav>
 
+      {/* Dynamic View Renderer */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 pb-16">
-        <Suspense fallback={<div className="py-20 text-center text-slate-400 font-bold animate-pulse">Loading...</div>}>
-          {activeTab === 'exams'     && <ExamManager />}
-          {activeTab === 'students'  && <StudentManager />}
-          {activeTab === 'monitor'   && <LiveMonitor />}
-          {activeTab === 'analytics' && <ExamAnalytics />}
+        <Suspense fallback={<div className="flex items-center justify-center py-20 text-slate-400 font-bold animate-pulse">Loading View...</div>}>
+          
+          {currentView === 'main' && (
+            <AdminMainView 
+              onScheduleClick={() => { setCurrentView('schedule'); setEditingDraft(null); }}
+              onResumeDraft={(draft) => { setEditingDraft(draft); setCurrentView('schedule'); }}
+              onMonitorLive={(test) => { setSelectedExam(test); setCurrentView('live'); }}
+              onViewUpcoming={(test) => { setSelectedExam(test); setCurrentView('preview'); }}
+              onViewAnalytics={(test) => { setSelectedExam(test); setCurrentView('analytics'); }}
+            />
+          )}
+
+          {currentView === 'schedule' && (
+            <ScheduleTest 
+              initialData={editingDraft}
+              onBack={goHome}
+            />
+          )}
+
+          {currentView === 'live' && (
+            <LiveTestMonitor test={selectedExam} onBack={goHome} />
+          )}
+
+          {currentView === 'preview' && (
+            <UpcomingTestPreview test={selectedExam} onBack={goHome} />
+          )}
+
+          {currentView === 'analytics' && (
+            <AnalyticsView test={selectedExam} onBack={goHome} />
+          )}
+
+          {currentView === 'directory' && (
+            <StudentDirectory />
+          )}
+
         </Suspense>
       </main>
     </div>
