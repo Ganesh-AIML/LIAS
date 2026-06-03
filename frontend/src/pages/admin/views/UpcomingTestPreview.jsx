@@ -1,57 +1,57 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ArrowLeft, Edit3, MonitorPlay, Clock, Database, 
-  CheckCircle, ChevronLeft, ChevronRight, FileText, Code2, AlertTriangle
+  CheckCircle, ChevronLeft, ChevronRight, Code2, AlertTriangle
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { adminApi } from '../../../hooks/useAdminApi'; // Make sure this path is correct
 
 export default function UpcomingTestPreview({ test, onBack, onEdit }) {
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [fullTestData, setFullTestData] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // ==========================================\n  // 🚀 DATA TRANSFORMER: LIAS Database -> UI\n  // ==========================================
+  // 🚀 NEW: Fetch the deep data containing the questions
+  useEffect(() => {
+    const fetchFullExam = async () => {
+      try {
+        const res = await adminApi.get(`/admin/exams/${test.id}`);
+        if (res.success) setFullTestData(res.data);
+      } catch (err) {
+        console.error("Failed to load exam details");
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (test?.id) fetchFullExam();
+  }, [test.id]);
+
   const activeQuestions = useMemo(() => {
     const questions = [];
-    
-    // 1. Extract MCQs
-    if (test?.questions) {
-      test.questions.forEach(q => {
+    if (fullTestData?.questions) {
+      fullTestData.questions.forEach(q => {
         questions.push({
-          id: q.id,
-          type: 'mcq',
-          section: q.section,
-          text: q.text,
-          options: [
-            { id: 'A', text: q.optA },
-            { id: 'B', text: q.optB },
-            { id: 'C', text: q.optC },
-            { id: 'D', text: q.optD }
-          ],
+          id: q.id, type: 'mcq', section: q.section, text: q.text,
+          options: [{ id: 'A', text: q.optA }, { id: 'B', text: q.optB }, { id: 'C', text: q.optC }, { id: 'D', text: q.optD }],
           correct: q.ans
         });
       });
     }
-
-    // 2. Extract Coding Problems
-    if (test?.coding_problems) {
-      test.coding_problems.forEach(cp => {
+    if (fullTestData?.coding_problems) {
+      fullTestData.coding_problems.forEach(cp => {
         questions.push({
-          id: cp.id,
-          type: 'coding',
-          section: 'Programming',
-          title: cp.title,
-          text: cp.description,
-          constraints: cp.constraints,
-          testCases: cp.testCases || []
+          id: cp.id, type: 'coding', section: 'Programming', title: cp.title, text: cp.description, constraints: cp.constraints
         });
       });
     }
-
     return questions;
-  }, [test]);
+  }, [fullTestData]);
 
   const activeQ = activeQuestions[currentQIndex];
+
+  if (loading) return <div className="p-20 text-center font-bold animate-pulse text-slate-400">Loading Exam Manifest...</div>;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">

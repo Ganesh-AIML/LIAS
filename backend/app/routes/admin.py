@@ -29,6 +29,15 @@ def verify_admin(x_admin_token: str = Header(None)):
         raise HTTPException(status_code=403, detail="Unauthorized.")
     return True
 
+
+# ── LOGIN VERIFICATION ─────────────────────────────────────────────────────────
+@router.get("/verify")
+def verify_admin_login(_: bool = Depends(verify_admin)):
+    """Explicit endpoint used by the frontend to validate the X-Admin-Token."""
+    return {"success": True, "message": "Admin verified"}
+
+
+
 # ── NEW PYDANTIC SCHEMAS FOR DYNAMIC EXAMS ─────────────────────────────────────
 
 class QuestionPayload(BaseModel):
@@ -252,3 +261,103 @@ def get_exam_analytics(
             "students": student_results
         }
     }
+
+
+# ── 1. GET FULL EXAM DETAILS (For Preview Mode) ─────────────────────────────────
+@router.get("/exams/{exam_id}")
+def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam: raise HTTPException(status_code=404)
+    
+    qs = db.query(Question).filter(Question.exam_id == exam_id).all()
+    cps = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+    
+    return {"success": True, "data": {
+        "id": exam.id,
+        "title": exam.title,
+        "duration_minutes": exam.duration_seconds // 60,
+        "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans} for q in qs],
+        "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps]
+    }}
+
+# ── 2. GET LIVE MONITOR DATA ───────────────────────────────────────────────────
+@router.get("/exams/{exam_id}/monitor")
+def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
+    sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False).all()
+    
+    active_now = 0
+    total_submitted = 0
+    student_data = []
+    
+    for s in sessions:
+        if s.is_submitted: total_submitted += 1
+        else: active_now += 1
+            
+        violations = db.query(ViolationLog).filter(ViolationLog.session_id == s.id).count()
+        student_data.append({
+            "student_id": s.student_id,
+            "session_id": s.id,
+            "submitted": s.is_submitted,
+            "total_violations": violations,
+            "joined_at": s.created_at
+        })
+        
+    return {"success": True, "data": {
+        "total_enrolled": enrolled, "active_now": active_now, 
+        "total_submitted": total_submitted, "students": student_data
+    }}
+
+# ── 3. POST KICK-OUT (REVOKE SESSION) ──────────────────────────────────────────
+class RevokePayload(BaseModel):
+    session_id: str
+
+@router.post("/sessions/revoke")
+def revoke_session(payload: RevokePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
+    if session:
+        session.is_revoked = True
+        db.commit()
+    return {"success": True}
+
+# ── 4. STUDENT DIRECTORY CRUD ──────────────────────────────────────────────────
+class StudentCreatePayload(BaseModel):
+    student_id: str
+    exam_id: str
+    password: str
+
+class StudentsBulkPayload(BaseModel):
+    students: List[StudentCreatePayload]
+
+@router.post("/students")
+def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    import secrets
+    for s in payload.students:
+        token = f"LIAS_{s.student_id.upper()}_{secrets.token_hex(4).upper()}"
+        hashed = bcrypt.hashpw(s.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        db.add(TokenRegistry(
+            token=token, exam_id=s.exam_id, student_id=s.student_id,
+            password_hash=hashed, is_active=True
+        ))
+    db.commit()
+    return {"success": True}
+
+class StudentUpdatePayload(BaseModel):
+    password: Optional[str] = None
+    is_active: bool
+
+@router.put("/students/{token}")
+def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
+    if not record: raise HTTPException(status_code=404)
+    record.is_active = payload.is_active
+    if payload.password:
+        record.password_hash = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    db.commit()
+    return {"success": True}
+
+@router.delete("/students/{token}")
+def delete_student(token: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    db.query(TokenRegistry).filter(TokenRegistry.token == token).delete()
+    db.commit()
+    return {"success": True}
