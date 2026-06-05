@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, lazy, Suspense, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import io from 'socket.io-client';
 import {
@@ -143,12 +143,14 @@ export default function ExamWorkspace() {
   const [consoleHeight, setConsoleHeight] = useState(250); 
   const [isResizing, setIsResizing] = useState(false);
 
-  const flatQuestions = React.useMemo(
+  // 🚀 FIX: Removed 'React.' prefix and used the imported 'useMemo'
+  const flatQuestions = useMemo(
     () => examData?.sections?.flatMap(s => s.questions || []) || [],
     [examData]
   );
 
-  const groupedQuestions = React.useMemo(
+  // 🚀 FIX: Removed 'React.' prefix and used the imported 'useMemo'
+  const groupedQuestions = useMemo(
     () => flatQuestions.reduce((acc, q, idx) => {
       const sName = q.sectionName || 'General Section';
       if (!acc[sName]) acc[sName] = [];
