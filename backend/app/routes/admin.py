@@ -569,9 +569,31 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
         })
     return {"success": True, "data": result}
 
-# ── ADD THIS RIGHT BELOW IT (To allow deleting tests) ──────────────────────
 @router.delete("/exams/{exam_id}")
 def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
-    db.query(Exam).filter(Exam.id == exam_id).delete()
-    db.commit()
-    return {"success": True}
+    try:
+        # 1. Clean up violation logs attached to this exam's sessions
+        session_ids = [s.id for s in db.query(ExamSession.id).filter(ExamSession.exam_id == exam_id).all()]
+        if session_ids:
+            db.query(ViolationLog).filter(ViolationLog.session_id.in_(session_ids)).delete(synchronize_session=False)
+        
+        # 2. Clean up test cases attached to this exam's coding problems
+        problem_ids = [p.id for p in db.query(CodingProblem.id).filter(CodingProblem.exam_id == exam_id).all()]
+        if problem_ids:
+            db.query(TestCase).filter(TestCase.problem_id.in_(problem_ids)).delete(synchronize_session=False)
+            
+        # 3. Clean up core child tables
+        db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete(synchronize_session=False)
+        db.query(Question).filter(Question.exam_id == exam_id).delete(synchronize_session=False)
+        db.query(ExamSession).filter(ExamSession.exam_id == exam_id).delete(synchronize_session=False)
+        db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).delete(synchronize_session=False)
+
+        # 4. Finally, safely delete the parent Exam
+        db.query(Exam).filter(Exam.id == exam_id).delete(synchronize_session=False)
+        db.commit()
+        return {"success": True}
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Safe cascade delete failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete exam and its nested records.")
