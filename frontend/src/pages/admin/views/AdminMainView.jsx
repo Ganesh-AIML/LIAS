@@ -62,21 +62,21 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
     } catch (err) { alert(err.message); }
   };
 
-  // Feature: Deep Fetch Draft
   const handleEditDraft = async (id) => {
     setIsFetchingDraft(true);
     try {
       const res = await adminApi.get(`/admin/exams/${id}`);
-      if (res.success) onResumeDraft(res.data); // Pass full data to ScheduleTest
+      if (res.success) onResumeDraft(res.data); 
     } catch (err) { alert("Failed to load draft payload."); } 
     finally { setIsFetchingDraft(false); }
   };
 
-  // Feature: Copy Link
-  const handleCopyLink = () => {
-    const link = `${window.location.origin}`; // Instructed to share base link to students
+  // 🚀 FIX: Updated to explicitly point to the /join route for students
+  const handleCopyLink = (examId) => {
+    // Appends /join and includes the exam ID parameter for clarity
+    const link = `${window.location.origin}/join?exam=${examId}`; 
     navigator.clipboard.writeText(link);
-    alert("Login portal link copied to clipboard!");
+    alert("Student Login portal link copied to clipboard!");
   };
 
   const liveTests = exams.filter(e => e.status === 'live');
@@ -106,13 +106,14 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
                 <div className="absolute top-0 right-0 bg-red-50 text-red-600 text-[10px] font-black uppercase px-3 py-1 rounded-bl-lg tracking-widest flex items-center gap-1">Live Now</div>
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="font-black text-lg text-slate-900 pr-12 truncate">{test.title}</h3>
-                  <button onClick={handleCopyLink} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                  {/* 🚀 FIX: Passed test.id to the handler */}
+                  <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                 </div>
                 <div className="space-y-2 mb-6">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Clock size={14}/> Ends in</span><span className="font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded"><LiveCountdown rawDate={test.starts_at_ms} duration={test.duration_minutes} isUpcoming={false} ts={ts} /></span></div>
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Users size={14}/> Active Now</span><span className="font-black text-slate-700">{test.participants || 0}</span></div>
                 </div>
-                <button onClick={() => onMonitorLive(test)} className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm"><Activity size={16} /> Enter Live Monitor</button>
+                <button onClick={() => onMonitorLive(test)} className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm group-hover:shadow-md"><Activity size={16} /> Enter Live Monitor</button>
               </div>
             ))}
           </div>
@@ -130,7 +131,8 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
               <div key={test.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
-                  <button onClick={handleCopyLink} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                  {/* 🚀 FIX: Passed test.id to the handler */}
+                  <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                 </div>
                 <div className="space-y-2 mb-6">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><CalendarDays size={14}/> Scheduled</span><span className="font-bold text-slate-700">{new Date(test.starts_at_ms).toLocaleDateString()}</span></div>
