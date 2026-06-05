@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from pydantic import BaseModel, field_validator
 
 from app.database import get_db
@@ -160,6 +160,74 @@ def create_exam(
         logger.error(f"Failed to create exam: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to save exam data to the database.")
     
+
+@router.put("/exams/{exam_id}")
+def update_exam(
+    exam_id: str,
+    payload: ExamCreatePayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Updates an existing draft exam. 
+    It atomically purges old questions/problems and replaces them with the new payload.
+    """
+    try:
+        exam = db.query(Exam).filter(Exam.id == exam_id).first()
+        if not exam:
+            raise HTTPException(status_code=404, detail="Exam not found.")
+
+        # 1. Update Meta
+        exam.title = payload.title
+        exam.duration_seconds = payload.duration_minutes * 60
+        exam.starts_at = payload.starts_at / 1000.0
+        exam.status = payload.status
+
+        # Update passwords if provided (otherwise keep existing)
+        if payload.start_password and not payload.start_password.startswith("$2b$"):
+            exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        if payload.end_password and not payload.end_password.startswith("$2b$"):
+            exam.end_password_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+        # 2. Purge old nested data (Cascades will handle test cases)
+        db.query(Question).filter(Question.exam_id == exam_id).delete()
+        db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete()
+
+        # 3. Re-insert new Questions
+        for idx, q in enumerate(payload.questions):
+            new_q = Question(
+                id=f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                exam_id=exam_id, section=q.section, text=q.text,
+                optA=q.optA, optB=q.optB, optC=q.optC, optD=q.optD, ans=q.ans
+            )
+            db.add(new_q)
+
+        # 4. Re-insert new Coding Problems & Test Cases
+        for p_idx, cp in enumerate(payload.coding_problems):
+            cp_id = f"cp_{exam_id}_{p_idx}_{uuid.uuid4().hex[:6]}"
+            new_cp = CodingProblem(
+                id=cp_id, exam_id=exam_id, title=cp.title,
+                description=cp.description, constraints=cp.constraints, languages=cp.languages
+            )
+            db.add(new_cp)
+
+            for t_idx, tc in enumerate(cp.testCases):
+                new_tc = TestCase(
+                    id=f"tc_{cp_id}_{t_idx}_{uuid.uuid4().hex[:4]}",
+                    problem_id=cp_id, input_data=tc.input,
+                    expected_output=tc.output, is_hidden=tc.isHidden
+                )
+                db.add(new_tc)
+
+        db.commit()
+        return {"success": True, "message": "Exam updated successfully"}
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update exam: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update exam data.")
+
+
 
 @router.get("/exams/{exam_id}/analytics")
 def get_exam_analytics(
@@ -329,22 +397,102 @@ class StudentCreatePayload(BaseModel):
 class StudentsBulkPayload(BaseModel):
     students: List[StudentCreatePayload]
 
+
+# ── GET ALL STUDENTS (Fortified with Auto-Migration) ───────────────────────────
+@router.get("/students")
+def list_students(
+    exam_id: Optional[str] = None,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Fetch all students. Includes root-level schema self-healing."""
+    
+    # 🚀 ROOT FIX 1: Auto-Migrate missing columns silently without manual SQL patching
+    try:
+        db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE;"))
+        db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS submission_payload TEXT;"))
+        db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Auto-migration skipped: {e}")
+
+    query = db.query(TokenRegistry)
+    if exam_id:
+        query = query.filter(TokenRegistry.exam_id == exam_id)
+    records = query.all()
+
+    if not records:
+        return {"success": True, "data": []}
+
+    student_ids = [r.student_id for r in records]
+    
+    # Bulk fetch sessions
+    sessions = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.student_id.in_(student_ids),
+            ExamSession.is_revoked == False
+        )
+        .order_by(ExamSession.created_at.desc())
+        .all()
+    )
+    
+    session_map = {}
+    for s in sessions:
+        key = (s.student_id, s.exam_id)
+        if key not in session_map:
+            session_map[key] = s
+
+    result = []
+    for r in records:
+        session = session_map.get((r.student_id, r.exam_id))
+        result.append({
+            "token":      r.token,
+            "student_id": r.student_id,
+            "exam_id":    r.exam_id,
+            "is_active":  r.is_active,
+            "submitted":  session.is_submitted if session else False,
+            "session_id": session.id if session else None,
+        })
+    return {"success": True, "data": result}
+
+
+# ── POST STUDENTS (Fortified with Upsert Logic to prevent duplicates) ──────────
 @router.post("/students")
 def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     import secrets
+
+    # Ensure schema is ready
+    try:
+        db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
     for s in payload.students:
-        token = f"LIAS_{s.student_id.upper()}_{secrets.token_hex(4).upper()}"
+        # 🚀 ROOT FIX 2: Upsert Logic (Check if student already exists for this exam)
+        existing_record = db.query(TokenRegistry).filter(
+            TokenRegistry.student_id == s.student_id,
+            TokenRegistry.exam_id == s.exam_id
+        ).first()
+        
         hashed = bcrypt.hashpw(s.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        db.add(TokenRegistry(
-            token=token, exam_id=s.exam_id, student_id=s.student_id,
-            password_hash=hashed, is_active=True
-        ))
+        
+        if existing_record:
+            # UPDATE: Overwrite password and reactivate, but KEEP the same token
+            existing_record.password_hash = hashed
+            existing_record.is_active = True
+        else:
+            # INSERT: Brand new student, mint a new token
+            token = f"LIAS_{s.student_id.upper()}_{secrets.token_hex(4).upper()}"
+            db.add(TokenRegistry(
+                token=token, exam_id=s.exam_id, student_id=s.student_id,
+                password_hash=hashed, is_active=True
+            ))
+            
     db.commit()
     return {"success": True}
-
-class StudentUpdatePayload(BaseModel):
-    password: Optional[str] = None
-    is_active: bool
 
 @router.put("/students/{token}")
 def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
