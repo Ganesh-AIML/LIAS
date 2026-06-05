@@ -83,22 +83,12 @@ export default function ExamWorkspace() {
   const [currentTechQ, setCurrentTechQ] = useState(0);
   const [reviewLater, setReviewLater] = useState([]);
 
-  // 🛡️ RECOVERY ENGINE: Lazy initialization directly from SessionStorage (Fixes ESLint performance warning)
+  // 🛡️ RECOVERY ENGINE: Lazy initialization directly from SessionStorage
   const [answers, setAnswers] = useState(() => {
     const cached = localStorage.getItem(`scope_answers_${examId}`);
     return cached ? JSON.parse(cached) : {};
   });
   
-  useEffect(() => {
-    if (Object.keys(savedCodes).length > 0) {
-      try {
-        localStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
-      } catch (e) {
-        console.warn('Storage quota exceeded — code not cached locally', e);
-      }
-    }
-  }, [savedCodes, examId]);
-
   const [language, setLanguage] = useState(() => {
     return localStorage.getItem(`scope_active_lang_${examId}`) || '71';
   });
@@ -114,23 +104,21 @@ export default function ExamWorkspace() {
   const [needsFullscreen, setNeedsFullscreen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-useEffect(() => {
-  const goOnline  = () => setIsOnline(true);
-  const goOffline = () => setIsOnline(false);
-  window.addEventListener('online',  goOnline);
-  window.addEventListener('offline', goOffline);
-  return () => {
-    window.removeEventListener('online',  goOnline);
-    window.removeEventListener('offline', goOffline);
-  };
-}, []);
-
+  useEffect(() => {
+    const goOnline  = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener('online',  goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online',  goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
 
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationModal, setShowViolationModal] = useState(false);
   const MAX_VIOLATIONS = examData?.maxViolations ?? 3;
 
-  // Issue 28: fetch authoritative violation count from server on each violation
   const syncViolationCount = async () => {
     try {
       const res = await api.get('/exam/violation/count');
@@ -170,8 +158,7 @@ useEffect(() => {
     [flatQuestions]
   );
 
-  // 🛡️ AUTO-SAVE: Cache answers and source code
-  // Issue 29: wrapped in try/catch — sessionStorage has a 5-10MB limit; silent failure loses answers
+  // 🛡️ AUTO-SAVE: Cache answers
   useEffect(() => {
     if (Object.keys(answers).length > 0) {
       try {
@@ -182,16 +169,7 @@ useEffect(() => {
     }
   }, [answers, examId]);
 
-  useEffect(() => {
-    if (Object.keys(savedCodes).length > 0) {
-      try {
-        localStorage.setItem(`scope_codes_${examId}`, JSON.stringify(savedCodes));
-      } catch (e) {
-        console.warn('Storage quota exceeded — code not cached locally', e);
-      }
-    }
-  }, [savedCodes, examId]);
-
+  // 🛡️ AUTO-SAVE: Cache source code
   useEffect(() => {
     if (sourceCode && sourceCode !== '// Loading code...') {
       try {
@@ -215,7 +193,6 @@ useEffect(() => {
   useEffect(() => {
     const socketURL = import.meta.env.VITE_API_URL;
     const socket = io(socketURL);
-    // Issue 27: send JWT so server can authenticate the WebSocket session
     const jwt = useAuthStore.getState().sessionJwt;
     if (jwt) {
       socket.emit('join_exam_room', { exam_id: examId, token: jwt });
@@ -242,19 +219,16 @@ useEffect(() => {
 
     const triggerViolation = (event_type, detail = '') => {
       logViolation(event_type, detail);
-      // Issue 28: sync with server count after logging; fall back to local increment on failure
       syncViolationCount().then(serverCount => {
         if (serverCount === null) setViolationCount(prev => prev + 1);
         setShowViolationModal(true);
       });
     };
 
-    // 1. Tab switch / window blur
     const handleVisibilityChange = () => {
       if (document.hidden) triggerViolation('tab_switch', 'Student switched tab or minimized window');
     };
 
-    // 2. Fullscreen exit
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement) {
         setNeedsFullscreen(true);
@@ -264,7 +238,6 @@ useEffect(() => {
       }
     };
 
-    // 3. Copy / Cut — blocked + logged
     const handleCopy = (e) => {
       e.preventDefault();
       triggerViolation('copy_paste', 'Copy attempted');
@@ -275,20 +248,17 @@ useEffect(() => {
       triggerViolation('copy_paste', 'Cut attempted');
       setToastMessage('🚫 Cutting is not allowed during the exam.');
     };
-    // Paste blocked silently — student may try to paste answers
     const handlePaste = (e) => {
       e.preventDefault();
       triggerViolation('copy_paste', 'Paste attempted');
       setToastMessage('🚫 Pasting is not allowed during the exam.');
     };
 
-    // 4. Right-click context menu — blocked
     const handleContextMenu = (e) => {
       e.preventDefault();
       setToastMessage('🚫 Right-click is disabled during the exam.');
     };
 
-    // 5. Keyboard shortcuts — blocked silently without violation strike
     const BLOCKED_KEYS = new Set(['F12', 'F5', 'F11']);
     const handleKeyDown = (e) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -304,14 +274,12 @@ useEffect(() => {
       }
     };
 
-    // 6. Back navigation lock
     window.history.pushState(null, null, window.location.href);
     const handlePopState = () => {
       window.history.pushState(null, null, window.location.href);
       triggerViolation('tab_switch', 'Back navigation attempted');
     };
 
-    // 7. Page unload warning
     const handleBeforeUnload = (e) => {
       e.preventDefault();
       e.returnValue = "Exam is active.";
@@ -339,10 +307,9 @@ useEffect(() => {
       window.removeEventListener('popstate', handlePopState);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); 
   // ── END ANTI-CHEAT ENGINE ───────────────────────────────────────────────
 
-  // Fetch Exam Payload
   useEffect(() => {
     const loadWorkspace = async () => {
       try {
@@ -365,13 +332,10 @@ useEffect(() => {
       }
     };
     loadWorkspace();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId]);
 
-// 🛡️ AUTO-SUBMIT: When time runs out
   useEffect(() => {
     if (isTimeUp && !isSubmitting) {
-      // Wrap the state update in a timeout to break the synchronous render cycle
       setTimeout(() => {
         setToastMessage("⏳ Time has expired. Auto-submitting exam...");
         api.post(`/exam/${examId}/submit`, { answers, autoSubmit: true })
@@ -379,7 +343,6 @@ useEffect(() => {
           .catch(err => console.error("Auto-submit failed", err));
       }, 0);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTimeUp]);
 
   const toggleReview = (questionId) => {
@@ -452,7 +415,6 @@ useEffect(() => {
     setIsSubmitting(true);
     setEndPasswordError('');
     try {
-      // Verify end password first
       const verifyRes = await violationApi.post(`/exam/${examId}/verify-password`, { type: 'end', password: endPasswordInput });
       if (!verifyRes.data.success) {
         setEndPasswordError(verifyRes.data.error || "Incorrect End Password.");
@@ -460,11 +422,11 @@ useEffect(() => {
         return;
       }
       await api.post(`/exam/${examId}/submit`, { answers });
-['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
-  localStorage.removeItem(`scope_${key}_${examId}`)
-);
-setShowEndModal(false);
-navigate('/dashboard');
+      ['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
+        localStorage.removeItem(`scope_${key}_${examId}`)
+      );
+      setShowEndModal(false);
+      navigate('/dashboard');
     } catch (err) {
       console.error(err);
       setEndPasswordError("Submission failed. Network Error.");
@@ -548,7 +510,7 @@ navigate('/dashboard');
           <div className="max-w-3xl w-full mx-auto">
             <div className="flex items-center justify-between mb-6">
               <span className="text-sm font-bold text-cyan-700 bg-cyan-50 px-3 py-1 rounded-full">
-                Question {currentIndex + 1} of {questions.length}
+                Question {currentIndex + 1} of {flatQuestions.length}
               </span>
             </div>
 
@@ -620,8 +582,8 @@ navigate('/dashboard');
               </div>
 
               <button
-                onClick={() => setIndex(Math.min(questions.length - 1, currentIndex + 1))}
-                disabled={currentIndex === questions.length - 1}
+                onClick={() => setIndex(Math.min(flatQuestions.length - 1, currentIndex + 1))}
+                disabled={currentIndex === flatQuestions.length - 1}
                 className="px-5 py-2.5 rounded-lg font-bold text-white bg-cyan-600 shadow-md flex items-center gap-2"
               >
                 Next <ChevronRight size={18} />
@@ -635,7 +597,7 @@ navigate('/dashboard');
 
   const renderCodingSection = () => {
     const currentMonacoLang = SUPPORTED_LANGUAGES.find(l => l.id === language)?.monaco || "java";
-    const codingProblem = examData?.codingProblems?.[0]; // Default to first problem
+    const codingProblem = examData?.codingProblems?.[0]; 
 
     return (
       <div className="flex flex-col lg:flex-row h-[calc(100vh-120px)]">
@@ -822,20 +784,18 @@ navigate('/dashboard');
             </p>
             <button
               onClick={() => {
-                // KICK OUT LOGIC
                 if (violationCount >= MAX_VIOLATIONS) {
                   api.post(`/exam/${examId}/submit`, { answers, autoSubmit: true })
-  .then(() => {
-    ['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
-      localStorage.removeItem(`scope_${key}_${examId}`)
-    );
-    navigate('/dashboard');
-  })
-                    .catch(() => navigate('/dashboard')); // Force out even if network fails
+                  .then(() => {
+                    ['answers', 'codes', 'active_lang', 'active_source'].forEach(key =>
+                      localStorage.removeItem(`scope_${key}_${examId}`)
+                    );
+                    navigate('/dashboard');
+                  })
+                  .catch(() => navigate('/dashboard')); 
                   return;
                 }
                 
-                // NORMAL RESUME LOGIC
                 setShowViolationModal(false);
                 if (!document.fullscreenElement) {
                   document.documentElement.requestFullscreen().catch(() => {});
@@ -889,10 +849,10 @@ navigate('/dashboard');
           </div>
         </div>
         {!isOnline && (
-  <span className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-bold mr-3">
-    ⚠️ Offline — answers saved locally
-  </span>
-)}
+          <span className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-bold mr-3">
+            ⚠️ Offline — answers saved locally
+          </span>
+        )}
         <button onClick={handleFinishClick} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition-all">
           Finish Exam
         </button>
