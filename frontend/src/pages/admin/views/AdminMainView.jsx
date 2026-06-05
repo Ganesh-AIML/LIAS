@@ -42,6 +42,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
   
   // 🚀 Feature 1: Custom Delete Modal State
   const [examToDelete, setExamToDelete] = useState(null);
+  const [isDeletingExam, setIsDeletingExam] = useState(false);
 
   const fetchExams = async () => {
     try {
@@ -59,11 +60,16 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
 
   const confirmDeleteExam = async () => {
     if (!examToDelete) return;
+    setIsDeletingExam(true); // 🚀 Set loading to true
     try {
       await adminApi.delete(`/admin/exams/${examToDelete.id}`);
       setExamToDelete(null);
       fetchExams();
-    } catch (err) { alert(err.message); }
+    } catch (err) { 
+      alert(err.message); 
+    } finally {
+      setIsDeletingExam(false); // 🚀 Reset loading state
+    }
   };
 
   const handleEditDraft = async (id) => {
@@ -106,9 +112,21 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
               This will irreversibly erase all questions, coding problems, enrolled students, and live test sessions. This cannot be undone.
             </p>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setExamToDelete(null)} className="px-4 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-lg text-sm transition-colors">Cancel</button>
-              <button onClick={confirmDeleteExam} className="px-4 py-2 font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm text-sm transition-colors">Yes, Delete Exam</button>
-            </div>
+  <button 
+    onClick={() => setExamToDelete(null)} 
+    disabled={isDeletingExam}
+    className="px-4 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-lg text-sm transition-colors disabled:opacity-50"
+  >
+    Cancel
+  </button>
+  <button 
+    onClick={confirmDeleteExam} 
+    disabled={isDeletingExam}
+    className={`px-4 py-2 font-bold text-white rounded-lg shadow-sm text-sm transition-colors ${isDeletingExam ? 'bg-red-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'}`}
+  >
+    {isDeletingExam ? 'Deleting Exam...' : 'Yes, Delete Exam'}
+  </button>
+</div>
           </div>
         </div>
       )}

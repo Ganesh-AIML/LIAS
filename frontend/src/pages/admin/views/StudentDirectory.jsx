@@ -11,6 +11,7 @@ export default function StudentDirectory() {
   const [students, setStudents] = useState([]);
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [filterExam, setFilterExam] = useState('');
@@ -99,10 +100,20 @@ export default function StudentDirectory() {
   const handleBulkDelete = async () => {
     if (selectedTokens.length === 0) return;
     if (!window.confirm(`Permanently delete ${selectedTokens.length} student records?`)) return;
+    
+    setIsBulkDeleting(true); // 🚀 Set loading state
     try {
       const res = await adminApi.post('/admin/students/bulk-delete', { tokens: selectedTokens });
-      if (res.success) { setIsBulkMode(false); setSelectedTokens([]); fetchData(); }
-    } catch (err) { alert(err.message); }
+      if (res.success) { 
+        setIsBulkMode(false); 
+        setSelectedTokens([]); 
+        fetchData(); 
+      }
+    } catch (err) { 
+      alert(err.message); 
+    } finally {
+      setIsBulkDeleting(false); // 🚀 Reset loading state
+    }
   };
 
   // ── INDIVIDUAL CRUD HANDLERS ──
@@ -180,15 +191,24 @@ export default function StudentDirectory() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {activeTab === 'directory' && (
               <button 
-                onClick={() => {
-                  if (isBulkMode && selectedTokens.length > 0) handleBulkDelete();
-                  else { setIsBulkMode(!isBulkMode); setSelectedTokens([]); }
-                }}
-                className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${isBulkMode ? (selectedTokens.length > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm' : 'bg-slate-200 hover:bg-slate-300 text-slate-700') : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
-              >
-                <Trash2 size={16}/> 
-                {isBulkMode ? (selectedTokens.length > 0 ? `Delete (${selectedTokens.length})` : 'Cancel') : 'Bulk Delete'}
-              </button>
+  onClick={() => {
+    if (isBulkMode && selectedTokens.length > 0) handleBulkDelete();
+    else { setIsBulkMode(!isBulkMode); setSelectedTokens([]); }
+  }}
+  disabled={isBulkDeleting}
+  className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+    isBulkMode 
+      ? (selectedTokens.length > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm' : 'bg-slate-200 hover:bg-slate-300 text-slate-700') 
+      : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+  } ${isBulkDeleting ? 'opacity-50 cursor-wait' : ''}`}
+>
+  <Trash2 size={16}/> 
+  {isBulkDeleting 
+    ? 'Deleting...' 
+    : isBulkMode 
+      ? (selectedTokens.length > 0 ? `Delete (${selectedTokens.length})` : 'Cancel') 
+      : 'Bulk Delete'}
+</button>
             )}
             
             <div className="relative w-full sm:w-64">
@@ -303,28 +323,73 @@ export default function StudentDirectory() {
               </div>
               <div className="border-t border-b border-slate-100 py-4 my-2">
                  <p className="text-xs font-bold text-slate-500 uppercase mb-2">Method 1: Bulk CSV Upload</p>
-                 <label className="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg px-4 py-2 text-sm font-bold transition-all cursor-pointer">
-                    <UploadCloud size={16} /> Upload CSV (ID, Password)
-                    <input type="file" accept=".csv" className="hidden" onChange={(e) => {
-                       const file = e.target.files[0];
+                 {/* Replace your existing <label> for the CSV upload with this: */}
+
+<label className={`w-full flex items-center justify-center gap-2 text-sm font-bold transition-all rounded-lg px-4 py-2 ${
+
+  isSubmitting 
+
+    ? 'bg-indigo-100 text-indigo-400 cursor-wait opacity-70' 
+
+    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 cursor-pointer'
+
+}`}>
+
+  <UploadCloud size={16} /> 
+
+  {isSubmitting ? 'Uploading & Enrolling...' : 'Upload CSV (ID, Password)'}
+
+  <input 
+
+    type="file" 
+
+    accept=".csv" 
+
+    className="hidden" 
+
+    disabled={isSubmitting} 
+
+    onChange={(e) => {
+
+      const file = e.target.files[0];
+
                        if (!file || !addForm.exam_id) { setFormError("Please select an exam first."); return; }
+
                        const reader = new FileReader();
+
                        reader.onload = async (ev) => {
+
                           try {
+
                              const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
+
                              const bulkPayload = rows.map(row => {
+
                                 const [id, pw] = row.split(',');
+
                                 return { student_id: id?.trim(), password: (pw||'').trim(), exam_id: addForm.exam_id };
+
                              }).filter(s => s.student_id && s.password);
+
                              setIsSubmitting(true);
+
                              const res = await adminApi.post('/admin/students', { students: bulkPayload });
+
                              if (res.success) { setShowAddModal(false); fetchData(); alert(`Successfully enrolled ${bulkPayload.length} students via CSV.`); }
+
                           } catch (err) { setFormError("Failed to parse CSV."); }
+
                           finally { setIsSubmitting(false); }
+
                        };
+
                        reader.readAsText(file);
-                    }}/>
-                 </label>
+
+    }}
+
+  />
+
+</label>
                  <p className="text-[10px] text-slate-400 text-center mt-1">Format expected: student_id,password</p>
               </div>
               <form onSubmit={handleAddSubmit}>
