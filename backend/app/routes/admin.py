@@ -494,6 +494,10 @@ def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin
     db.commit()
     return {"success": True}
 
+class StudentUpdatePayload(BaseModel):
+    password: Optional[str] = None
+    is_active: bool
+
 @router.put("/students/{token}")
 def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
