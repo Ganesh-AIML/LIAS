@@ -1,44 +1,48 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-// 🚀 FIX: Consolidated imports and explicitly added 'X' to prevent the ReferenceError crash
 import { 
   Users, Search, Plus, Edit3, Key, Trash2, 
   CheckCircle, XCircle, Shield, Copy, RefreshCw, 
   Filter, BookOpen, Lock, UploadCloud, X 
 } from 'lucide-react';
-import { adminApi } from '../../../hooks/useAdminApi'; // Adjust path if needed
+import { adminApi } from '../../../hooks/useAdminApi'; 
 
 export default function StudentDirectory() {
-  const [activeTab, setActiveTab] = useState('directory'); // 'directory' | 'credentials'
+  const [activeTab, setActiveTab] = useState('directory'); 
   const [students, setStudents] = useState([]);
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [filterExam, setFilterExam] = useState('');
 
-  // Modals
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   
-  // Forms
   const [addForm, setAddForm] = useState({ student_id: '', exam_id: '', password: '' });
   const [editForm, setEditForm] = useState({ password: '', is_active: true });
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ── DATA FETCHING ────────────────────────────────────────────────────────
+  // 🚀 FIX: Decoupled Fetching Architecture. 
+  // If Students fail to load, Exams will still populate the dropdown perfectly.
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [sRes, eRes] = await Promise.all([
-        adminApi.get(`/admin/students${filterExam ? `?exam_id=${filterExam}` : ''}`),
-        adminApi.get('/admin/exams'),
-      ]);
-      if (sRes.success) setStudents(sRes.data);
-      if (eRes.success) setExams(eRes.data);
-    } catch (err) {
-      console.warn('Directory fetch failed:', err.message);
+      // 1. Fetch Exams Independently
+      try {
+        const eRes = await adminApi.get('/admin/exams');
+        if (eRes.success) setExams(eRes.data);
+      } catch (err) {
+        console.warn('Exams fetch failed:', err.message);
+      }
+
+      // 2. Fetch Students Independently
+      try {
+        const sRes = await adminApi.get(`/admin/students${filterExam ? `?exam_id=${filterExam}` : ''}`);
+        if (sRes.success) setStudents(sRes.data);
+      } catch (err) {
+        console.warn('Students fetch failed:', err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -46,17 +50,13 @@ export default function StudentDirectory() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── FILTERING ────────────────────────────────────────────────────────────
   const filteredStudents = useMemo(() => {
     if (!searchQuery) return students;
     const lower = searchQuery.toLowerCase();
     return students.filter(s => s.student_id.toLowerCase().includes(lower) || s.token.toLowerCase().includes(lower));
   }, [students, searchQuery]);
 
-  // ── ACTIONS ──────────────────────────────────────────────────────────────
-  const handleCopy = (text) => {
-    navigator.clipboard.writeText(text);
-  };
+  const handleCopy = (text) => { navigator.clipboard.writeText(text); };
 
   const handleAddSubmit = async (e) => {
     e.preventDefault();
@@ -101,7 +101,6 @@ export default function StudentDirectory() {
     } catch (err) { alert(err.message); }
   };
 
-  // ── RENDER HELPERS ───────────────────────────────────────────────────────
   const getDept = (id) => {
     if (id.includes('-')) return id.split('-')[1].substring(0, 4).toUpperCase();
     return 'GEN';
@@ -112,7 +111,6 @@ export default function StudentDirectory() {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       
-      {/* HEADER & CONTROLS */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row gap-4 justify-between md:items-center">
         <div>
           <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
@@ -139,7 +137,6 @@ export default function StudentDirectory() {
         </div>
       </div>
 
-      {/* TABS & SEARCH */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
         <div className="border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row justify-between sm:items-center p-2 pr-4 gap-4">
           <div className="flex gap-1">
@@ -162,7 +159,6 @@ export default function StudentDirectory() {
           </div>
         </div>
 
-        {/* DATA TABLE */}
         <div className="overflow-x-auto min-h-[400px]">
           {loading ? (
             <div className="flex items-center justify-center h-[300px] text-slate-400 font-bold animate-pulse">
@@ -281,7 +277,7 @@ export default function StudentDirectory() {
                              const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
                              const bulkPayload = rows.map(row => {
                                 const [id, pw] = row.split(',');
-                                return { student_id: id.trim(), password: (pw||'').trim(), exam_id: addForm.exam_id };
+                                return { student_id: id?.trim(), password: (pw||'').trim(), exam_id: addForm.exam_id };
                              }).filter(s => s.student_id && s.password);
                              
                              setIsSubmitting(true);
