@@ -125,8 +125,8 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {liveTests.map(test => (
               <div key={test.id} className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-[0_4px_20px_-4px_rgba(239,68,68,0.1)] relative overflow-hidden group flex flex-col">
-                <div className="absolute top-0 right-0 bg-red-50 text-red-600 text-[10px] font-black uppercase px-3 py-1 rounded-bl-lg tracking-widest flex items-center gap-1">Live Now</div>
-                <div className="flex justify-between items-start mb-4">
+<div className="absolute top-0 right-0 bg-red-50 text-red-600 text-[10px] font-black uppercase px-3 py-1 rounded-bl-lg tracking-widest flex items-center gap-1 z-10">Live Now</div>
+<div className="flex justify-between items-start mb-4 pt-4 relative z-10">
                   <h3 className="font-black text-lg text-slate-900 pr-12 truncate">{test.title}</h3>
                   <div className="flex gap-2">
                     <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
