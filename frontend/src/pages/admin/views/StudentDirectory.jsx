@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { UploadCloud } from 'lucide-react';
+// 🚀 FIX: Consolidated imports and explicitly added 'X' to prevent the ReferenceError crash
 import { 
   Users, Search, Plus, Edit3, Key, Trash2, 
-  CheckCircle, XCircle, Shield, Copy, RefreshCw, Filter, BookOpen, Lock
+  CheckCircle, XCircle, Shield, Copy, RefreshCw, 
+  Filter, BookOpen, Lock, UploadCloud, X 
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi'; // Adjust path if needed
 
@@ -55,7 +56,6 @@ export default function StudentDirectory() {
   // ── ACTIONS ──────────────────────────────────────────────────────────────
   const handleCopy = (text) => {
     navigator.clipboard.writeText(text);
-    // Optional: Add a small toast notification here
   };
 
   const handleAddSubmit = async (e) => {
@@ -66,7 +66,6 @@ export default function StudentDirectory() {
     }
     setIsSubmitting(true);
     try {
-      // Assuming your backend accepts a single student creation or array. Adjust if needed.
       const res = await adminApi.post('/admin/students', { students: [addForm] });
       if (res.success) {
         setShowAddModal(false);
