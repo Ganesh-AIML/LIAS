@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { UploadCloud } from 'lucide-react';
 import { 
   Users, Search, Plus, Edit3, Key, Trash2, 
   CheckCircle, XCircle, Shield, Copy, RefreshCw, Filter, BookOpen, Lock
@@ -250,36 +251,65 @@ export default function StudentDirectory() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in duration-200">
             <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-              <h2 className="text-lg font-black text-slate-900">Enroll New Student</h2>
+              <h2 className="text-lg font-black text-slate-900">Enroll Students</h2>
               <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-700"><X size={20}/></button>
             </div>
-            <form onSubmit={handleAddSubmit}>
-              <div className="p-6 space-y-4">
-                {formError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-bold">{formError}</div>}
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5">Student ID (Roll No)</label>
-                  <input required type="text" value={addForm.student_id} onChange={e => setAddForm(p => ({ ...p, student_id: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500" placeholder="e.g. 23-AIML-101" />
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5">Assign to Exam</label>
-                  <select required value={addForm.exam_id} onChange={e => setAddForm(p => ({ ...p, exam_id: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500 appearance-none">
-                    <option value="" disabled>Select Exam...</option>
-                    {exams.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5 flex items-center gap-1.5"><Lock size={14}/> Set Initial Password</label>
-                  <input required type="text" value={addForm.password} onChange={e => setAddForm(p => ({ ...p, password: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500" placeholder="e.g. Student@123" />
-                </div>
+            
+            <div className="p-6 space-y-4">
+              {formError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-bold">{formError}</div>}
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase mb-1.5">Assign to Exam</label>
+                <select required value={addForm.exam_id} onChange={e => setAddForm(p => ({ ...p, exam_id: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500 appearance-none">
+                  <option value="" disabled>Select Exam...</option>
+                  {exams.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}
+                </select>
               </div>
-              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                <button type="button" onClick={() => setShowAddModal(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded-lg text-sm">Cancel</button>
-                <button type="submit" disabled={isSubmitting} className="px-6 py-2 bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-lg text-sm shadow-sm">{isSubmitting ? 'Enrolling...' : 'Enroll Student'}</button>
+
+              <div className="border-t border-b border-slate-100 py-4 my-2">
+                 <p className="text-xs font-bold text-slate-500 uppercase mb-2">Method 1: Bulk CSV Upload</p>
+                 <label className="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg px-4 py-2 text-sm font-bold transition-all cursor-pointer">
+                    <UploadCloud size={16} /> Upload CSV (ID, Password)
+                    <input type="file" accept=".csv" className="hidden" onChange={(e) => {
+                       const file = e.target.files[0];
+                       if (!file || !addForm.exam_id) {
+                           setFormError("Please select an exam first.");
+                           return;
+                       }
+                       const reader = new FileReader();
+                       reader.onload = async (ev) => {
+                          try {
+                             const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
+                             const bulkPayload = rows.map(row => {
+                                const [id, pw] = row.split(',');
+                                return { student_id: id.trim(), password: (pw||'').trim(), exam_id: addForm.exam_id };
+                             }).filter(s => s.student_id && s.password);
+                             
+                             setIsSubmitting(true);
+                             const res = await adminApi.post('/admin/students', { students: bulkPayload });
+                             if (res.success) {
+                                setShowAddModal(false);
+                                fetchData();
+                                alert(`Successfully enrolled ${bulkPayload.length} students via CSV.`);
+                             }
+                          } catch (err) { setFormError("Failed to parse or upload CSV."); }
+                          finally { setIsSubmitting(false); }
+                       };
+                       reader.readAsText(file);
+                    }}/>
+                 </label>
+                 <p className="text-[10px] text-slate-400 text-center mt-1">Format expected: student_id,password</p>
               </div>
-            </form>
+
+              <form onSubmit={handleAddSubmit}>
+                <p className="text-xs font-bold text-slate-500 uppercase mb-2">Method 2: Manual Entry</p>
+                <div className="space-y-3">
+                  <input required type="text" value={addForm.student_id} onChange={e => setAddForm(p => ({ ...p, student_id: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500" placeholder="Student ID (e.g. 23-AIML-101)" />
+                  <input required type="text" value={addForm.password} onChange={e => setAddForm(p => ({ ...p, password: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-cyan-500" placeholder="Set Initial Password" />
+                  <button type="submit" disabled={isSubmitting} className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-lg text-sm shadow-sm">{isSubmitting ? 'Enrolling...' : 'Enroll Single Student'}</button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

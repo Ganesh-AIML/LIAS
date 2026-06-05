@@ -4,13 +4,12 @@ import {
   PlusCircle, LayoutDashboard
 } from 'lucide-react';
 
-// We will port these files in the upcoming tasks. 
-// For now, they are lazy-loaded stubs.
+
 const AdminMainView       = lazy(() => import('./views/AdminMainView'));
 const ScheduleTest        = lazy(() => import('./views/ScheduleTest'));
-const LiveTestMonitor     = lazy(() => import('./views/LiveTestMonitor'));
-const UpcomingTestPreview = lazy(() => import('./views/UpcomingTestPreview'));
-const AnalyticsView       = lazy(() => import('./views/AnalyticsView'));
+const LiveTestMonitor     = lazy(() => import('./views/LiveTestMonitor')); 
+const UpcomingTestPreview = lazy(() => import('./views/UpcomingTestPreview')); 
+const AnalyticsView       = lazy(() => import('./views/AnalyticsView')); 
 const StudentDirectory    = lazy(() => import('./views/StudentDirectory'));
 
 // ── LOGIN GATE (Retained from previous phase) ─────────────────────────────────
