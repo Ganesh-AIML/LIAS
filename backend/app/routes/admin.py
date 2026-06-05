@@ -100,15 +100,16 @@ def create_exam(
         if payload.end_password:
             end_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-        # 2. Build the Exam Object
         new_exam = Exam(
-            id                  = exam_id,
-            title               = payload.title,
-            duration_seconds    = payload.duration_minutes * 60,
-            starts_at           = payload.starts_at / 1000.0, # Convert ms to seconds
-            start_password_hash = start_hash,
-            end_password_hash   = end_hash,
-            status              = payload.status
+            id=exam_id, 
+            title=payload.title, 
+            duration_seconds=payload.duration_minutes * 60,
+            starts_at=payload.starts_at / 1000.0, 
+            status=payload.status,
+            start_password_hash=start_hash, 
+            end_password_hash=end_hash,
+            start_secret=payload.start_password, # 🚀 ADD THIS
+            end_secret=payload.end_password      # 🚀 ADD THIS
         )
         db.add(new_exam)
 
@@ -183,11 +184,13 @@ def update_exam(
         exam.starts_at = payload.starts_at / 1000.0
         exam.status = payload.status
 
-        # Update passwords if provided (otherwise keep existing)
         if payload.start_password and not payload.start_password.startswith("$2b$"):
             exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            exam.start_secret = payload.start_password 
+            
         if payload.end_password and not payload.end_password.startswith("$2b$"):
             exam.end_password_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            exam.end_secret = payload.end_password     
 
         # 2. Purge old nested data (Cascades will handle test cases)
         db.query(Question).filter(Question.exam_id == exam_id).delete()
@@ -398,6 +401,19 @@ class StudentsBulkPayload(BaseModel):
     students: List[StudentCreatePayload]
 
 
+# ── 1. ADD THIS BULK DELETE ENDPOINT ──
+class BulkDeletePayload(BaseModel):
+    tokens: List[str]
+
+@router.post("/students/bulk-delete")
+def bulk_delete_students(payload: BulkDeletePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    """High-Performance route to delete multiple students at once."""
+    if payload.tokens:
+        # synchronize_session=False makes bulk deletes massively faster in SQLAlchemy
+        db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens)).delete(synchronize_session=False)
+        db.commit()
+    return {"success": True}
+
 # ── GET ALL STUDENTS (Fortified with Auto-Migration) ───────────────────────────
 @router.get("/students")
 def list_students(
@@ -514,52 +530,42 @@ def delete_student(token: str, _: bool = Depends(verify_admin), db: Session = De
     db.commit()
     return {"success": True}
 
-# ── REPLACE YOUR GET /exams ROUTE WITH THIS ─────────────────────────────────
+# ── 2. REPLACE YOUR EXISTING list_exams FUNCTION WITH THIS ──
 @router.get("/exams")
-def list_exams(
-    _: bool = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Return all exams with real-time computed status, respecting drafts."""
+def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    # Auto-Migrate the new secret columns securely
+    try:
+        db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_secret VARCHAR;"))
+        db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_secret VARCHAR;"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
     exams = db.query(Exam).all()
     now = time.time()
-    
-    active_sessions = db.query(ExamSession.exam_id, ExamSession.is_submitted).filter(
-        ExamSession.is_revoked == False
-    ).all()
+    active_sessions = db.query(ExamSession.exam_id, ExamSession.is_submitted).filter(ExamSession.is_revoked == False).all()
     
     counts_map = {}
     for session in active_sessions:
-        if session.exam_id not in counts_map:
-            counts_map[session.exam_id] = {"total": 0, "submitted": 0}
+        if session.exam_id not in counts_map: counts_map[session.exam_id] = {"total": 0, "submitted": 0}
         counts_map[session.exam_id]["total"] += 1
-        if session.is_submitted:
-            counts_map[session.exam_id]["submitted"] += 1
+        if session.is_submitted: counts_map[session.exam_id]["submitted"] += 1
 
     result = []
     for exam in exams:
-        # FIX: Explicitly check for draft status first!
-        if exam.status == "draft":
-            computed_status = "draft"
+        if exam.status == "draft": computed_status = "draft"
         else:
             end_at = exam.starts_at + exam.duration_seconds
-            if exam.starts_at > now:
-                computed_status = "upcoming"
-            elif now <= end_at:
-                computed_status = "live"
-            else:
-                computed_status = "completed"
+            if exam.starts_at > now: computed_status = "upcoming"
+            elif now <= end_at: computed_status = "live"
+            else: computed_status = "completed"
 
         stats = counts_map.get(exam.id, {"total": 0, "submitted": 0})
-        
         result.append({
-            "id":               exam.id,
-            "title":            exam.title,
-            "duration_minutes": exam.duration_seconds // 60,
-            "starts_at_ms":     exam.starts_at * 1000,
-            "status":           computed_status,
-            "participants":     stats["total"],
-            "submitted":        stats["submitted"],
+            "id": exam.id, "title": exam.title, "duration_minutes": exam.duration_seconds // 60,
+            "starts_at_ms": exam.starts_at * 1000, "status": computed_status,
+            "participants": stats["total"], "submitted": stats["submitted"],
+            "start_password": exam.start_secret, "end_password": exam.end_secret # 🚀 Now forwarded to frontend
         })
     return {"success": True, "data": result}
 

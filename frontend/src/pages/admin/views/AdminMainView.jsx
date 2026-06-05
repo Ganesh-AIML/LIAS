@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   PlusCircle, Activity, CheckCircle, Clock, Users, 
-  BarChart2, CalendarDays, FileText, FileEdit, Trash2, RefreshCw, Link, Copy
+  BarChart2, CalendarDays, FileText, FileEdit, Trash2, RefreshCw, Link, Copy, AlertTriangle, Key
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
 import { useTrueTime } from '../../../hooks/useTrueTime';
@@ -39,6 +39,9 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isFetchingDraft, setIsFetchingDraft] = useState(false);
+  
+  // 🚀 Feature 1: Custom Delete Modal State
+  const [examToDelete, setExamToDelete] = useState(null);
 
   const fetchExams = async () => {
     try {
@@ -54,10 +57,11 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
     return () => clearInterval(interval);
   }, []);
 
-  const handleDeleteTest = async (id) => {
-    if (!window.confirm("Permanently delete this exam and all its data?")) return;
+  const confirmDeleteExam = async () => {
+    if (!examToDelete) return;
     try {
-      await adminApi.delete(`/admin/exams/${id}`);
+      await adminApi.delete(`/admin/exams/${examToDelete.id}`);
+      setExamToDelete(null);
       fetchExams();
     } catch (err) { alert(err.message); }
   };
@@ -71,9 +75,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
     finally { setIsFetchingDraft(false); }
   };
 
-  // 🚀 FIX: Updated to explicitly point to the /join route for students
   const handleCopyLink = (examId) => {
-    // Appends /join and includes the exam ID parameter for clarity
     const link = `${window.location.origin}/join?exam=${examId}`; 
     navigator.clipboard.writeText(link);
     alert("Student Login portal link copied to clipboard!");
@@ -89,8 +91,28 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="space-y-8 animate-in fade-in duration-300 relative">
       
+      {/* 🚀 Feature 1: Custom Confirmation Modal */}
+      {examToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in duration-200">
+            <div className="flex items-center gap-3 mb-3 text-red-600">
+              <AlertTriangle size={24} />
+              <h3 className="text-xl font-black">Delete Examination?</h3>
+            </div>
+            <p className="text-sm font-semibold text-slate-600 mb-2">You are about to permanently delete <span className="text-slate-900 font-bold">"{examToDelete.title}"</span>.</p>
+            <p className="text-xs text-slate-500 mb-6 bg-red-50 p-3 rounded-lg border border-red-100">
+              This will irreversibly erase all questions, coding problems, enrolled students, and live test sessions. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setExamToDelete(null)} className="px-4 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-lg text-sm transition-colors">Cancel</button>
+              <button onClick={confirmDeleteExam} className="px-4 py-2 font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm text-sm transition-colors">Yes, Delete Exam</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── LIVE EXAMS ── */}
       {liveTests.length > 0 && (
         <section>
@@ -102,18 +124,35 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {liveTests.map(test => (
-              <div key={test.id} className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-[0_4px_20px_-4px_rgba(239,68,68,0.1)] relative overflow-hidden group">
+              <div key={test.id} className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-[0_4px_20px_-4px_rgba(239,68,68,0.1)] relative overflow-hidden group flex flex-col">
                 <div className="absolute top-0 right-0 bg-red-50 text-red-600 text-[10px] font-black uppercase px-3 py-1 rounded-bl-lg tracking-widest flex items-center gap-1">Live Now</div>
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="font-black text-lg text-slate-900 pr-12 truncate">{test.title}</h3>
-                  {/* 🚀 FIX: Passed test.id to the handler */}
-                  <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                    <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
+                  </div>
                 </div>
-                <div className="space-y-2 mb-6">
+                
+                {/* 🚀 Feature 3: Passwords Display */}
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 mb-4 space-y-1.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-500 font-bold uppercase flex items-center gap-1"><Key size={12}/> Start Pwd:</span>
+                    <span className="font-mono font-black text-slate-800 bg-white border px-1.5 py-0.5 rounded">{test.start_password || '********'}</span>
+                  </div>
+                  {test.end_password && (
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500 font-bold uppercase flex items-center gap-1"><Key size={12}/> End Pwd:</span>
+                      <span className="font-mono font-black text-slate-800 bg-white border px-1.5 py-0.5 rounded">{test.end_password}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2 mb-6 flex-grow">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Clock size={14}/> Ends in</span><span className="font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded"><LiveCountdown rawDate={test.starts_at_ms} duration={test.duration_minutes} isUpcoming={false} ts={ts} /></span></div>
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Users size={14}/> Active Now</span><span className="font-black text-slate-700">{test.participants || 0}</span></div>
                 </div>
-                <button onClick={() => onMonitorLive(test)} className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm group-hover:shadow-md"><Activity size={16} /> Enter Live Monitor</button>
+                <button onClick={() => onMonitorLive(test)} className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm group-hover:shadow-md mt-auto"><Activity size={16} /> Enter Live Monitor</button>
               </div>
             ))}
           </div>
@@ -128,19 +167,35 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {upcomingTests.map(test => (
-              <div key={test.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+              <div key={test.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col">
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
-                  {/* 🚀 FIX: Passed test.id to the handler */}
-                  <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                    <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
+                  </div>
                 </div>
-                <div className="space-y-2 mb-6">
+
+                {/* 🚀 Feature 3: Passwords Display */}
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 mb-4 space-y-1.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-500 font-bold uppercase flex items-center gap-1"><Key size={12}/> Start Pwd:</span>
+                    <span className="font-mono font-black text-slate-800 bg-white border px-1.5 py-0.5 rounded">{test.start_password || '********'}</span>
+                  </div>
+                  {test.end_password && (
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500 font-bold uppercase flex items-center gap-1"><Key size={12}/> End Pwd:</span>
+                      <span className="font-mono font-black text-slate-800 bg-white border px-1.5 py-0.5 rounded">{test.end_password}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2 mb-6 flex-grow">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><CalendarDays size={14}/> Scheduled</span><span className="font-bold text-slate-700">{new Date(test.starts_at_ms).toLocaleDateString()}</span></div>
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Clock size={14}/> Starts in</span><span className="font-bold text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded"><LiveCountdown rawDate={test.starts_at_ms} isUpcoming={true} ts={ts} /></span></div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 mt-auto">
                   <button onClick={() => onViewUpcoming(test)} className="flex-1 py-2.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 rounded-xl text-sm font-bold transition-colors">Preview Setup</button>
-                  <button onClick={() => handleDeleteTest(test.id)} className="p-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors"><Trash2 size={16}/></button>
                 </div>
               </div>
             ))}
@@ -158,7 +213,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
                 <div className="overflow-hidden pr-4"><h3 className="font-bold text-slate-800 truncate">{test.title}</h3><p className="text-xs text-amber-600 font-semibold mt-0.5">Unpublished Setup</p></div>
                 <div className="flex gap-2">
                   <button onClick={() => handleEditDraft(test.id)} className="p-2 text-slate-500 hover:text-cyan-700 hover:bg-white rounded-lg transition-all font-bold text-sm border border-transparent hover:border-cyan-200"><FileEdit size={16}/></button>
-                  <button onClick={() => handleDeleteTest(test.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-lg transition-all border border-transparent hover:border-red-200"><Trash2 size={16}/></button>
+                  <button onClick={() => setExamToDelete(test)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-lg transition-all border border-transparent hover:border-red-200"><Trash2 size={16}/></button>
                 </div>
               </div>
             ))}
@@ -181,8 +236,9 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
                     <td className="px-6 py-4 font-bold text-slate-900">{test.title}</td>
                     <td className="px-6 py-4 text-slate-600 font-medium">{new Date(test.starts_at_ms).toLocaleDateString()}</td>
                     <td className="px-6 py-4 text-center text-slate-700 font-semibold">{test.participants || 0}</td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right flex justify-end gap-2">
                       <button onClick={() => onViewAnalytics(test)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg font-bold transition-colors">View Analytics</button>
+                      <button onClick={() => setExamToDelete(test)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18}/></button>
                     </td>
                   </tr>
                 ))}

@@ -23,6 +23,8 @@ class Exam(Base):
     start_password_hash = Column(String, nullable=False)
     end_password_hash   = Column(String, nullable=True)
     status              = Column(String, default="upcoming") # draft, upcoming, live, completed
+    start_secret = Column(String, nullable=True)
+    end_secret   = Column(String, nullable=True)
 
     # Relationships - If Exam is deleted, delete all associated content
     questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")
