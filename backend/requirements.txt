@@ -12,3 +12,4 @@ python-engineio
 aiohttp
 PyJWT
 slowapi
+cryptography>=41.0.0
