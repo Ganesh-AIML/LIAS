@@ -223,6 +223,10 @@ def verify_exam_password(
         else exam_record.end_password_hash
     )
 
+    # 🚀 Fix: If checking end password, and the admin left it blank, auto-approve!
+    if payload.type == "end" and not target_hash:
+        return {"success": True}
+
     if not target_hash or not bcrypt.checkpw(
         payload.password.encode("utf-8"),
         target_hash.encode("utf-8"),

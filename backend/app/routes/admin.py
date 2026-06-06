@@ -539,7 +539,8 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
             elif now <= end_at: computed_status = "live"
             else: computed_status = "completed"
 
-        dec_start, dec_end = "********", "********"
+        dec_start = "********"
+        dec_end = None 
         try:
             if exam.start_secret: dec_start = cipher_suite.decrypt(exam.start_secret.encode("utf-8")).decode("utf-8")
             if exam.end_secret: dec_end = cipher_suite.decrypt(exam.end_secret.encode("utf-8")).decode("utf-8")
