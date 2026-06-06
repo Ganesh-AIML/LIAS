@@ -2,16 +2,14 @@ import time
 import json
 import bcrypt
 import logging
-from typing import Literal
+from typing import Literal, Dict, Any
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from pydantic import BaseModel
-
+from pydantic import BaseModel, ValidationError, Field
 from app.database import get_db
 from app.auth import verify_session_guard
-# 🚀 Expanded imports to hook onto content models
 from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase
 from app.limiter import limiter
 
@@ -23,10 +21,14 @@ ALLOWED_EVENTS = {
     "face_absent", "multi_person", "right_click", "keyboard_shortcut",
 }
 
+class SubmissionPayloadSchema(BaseModel):
+    mcqs: Dict[str, str] = {}
+    coding: Dict[str, Any] = {}
+
 
 class ViolationPayload(BaseModel):
     event_type: str
-    detail:     str = ""
+    detail:     str = Field(default="", max_length=1024)
 
 
 class SubmitPayload(BaseModel):
@@ -58,8 +60,14 @@ def log_violation(
         detail      = payload.detail[:256] if payload.detail else "",
     )
     db.add(entry)
+
+    # 🚀 H-02: Server-Side Anti-Cheat Enforcement (3 Strikes = Out)
+    current_violations = db.query(ViolationLog).filter(ViolationLog.session_id == active_session.id).count()
+    if current_violations >= 2: # The new entry makes it 3
+        active_session.is_revoked = True
+
     db.commit()
-    return {"success": True}
+    return {"success": True, "revoked": active_session.is_revoked}
 
 
 @router.get("/violation/count")
@@ -240,6 +248,17 @@ def submit_exam(
     Finalizes the candidate session and saves response data arrays securely 
     to the centralized database column for automated evaluation grading.
     """
+    # 🚀 H-08: Prevent cross-exam injection
+    if active_session.exam_id != exam_id:
+        raise HTTPException(status_code=403, detail="Session token does not match target exam.")
+
+    answers_data = payload.answers if payload.answers else {}
+
+    try:
+        validated_data = SubmissionPayloadSchema(**answers_data)
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Malformed submission payload. Missing 'mcqs' or 'coding' keys.")
+
     if active_session.is_submitted:
         raise HTTPException(status_code=400, detail="Exam already submitted.")
         

@@ -11,9 +11,18 @@ export default function StudentAuth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const setAuthSession = useAuthStore((state) => state.setAuthSession);
-  // Pre-fill token from URL param (?token=LIAS_Ganesh&exam=exam_789)
+// Pre-fill token from URL param (?token=LIAS_Ganesh&exam=exam_789)
 // Allows students to click a generated link and go straight to password entry.
 useEffect(() => {
+  // 🚀 Auditor H-07 Fix: Vacuum Cleaner Logic
+  // Instantly wipes any orphaned exam answers if a previous student 
+  // closed the tab on a shared lab computer without clicking "Sign Out".
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('scope_')) {
+      localStorage.removeItem(key);
+    }
+  });
+
   const params = new URLSearchParams(window.location.search);
   const urlToken = params.get('token');
 

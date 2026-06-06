@@ -1,5 +1,5 @@
 import time
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Float, Text
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Float, Text, Index
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -45,6 +45,9 @@ class ExamSession(Base):
 
     exam = relationship("Exam", back_populates="sessions")
     violations = relationship("ViolationLog", back_populates="session", cascade="all, delete-orphan")
+    __table_args__ = (
+        Index('ix_exam_sessions_lookup', 'student_id', 'exam_id', 'is_revoked'),
+    )
 
 
 class ViolationLog(Base):

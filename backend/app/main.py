@@ -5,20 +5,34 @@ import time
 from app.routes import auth, exam, admin as admin_routes
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.limiter import limiter
-
-# ... (keep your existing imports and configuration at the top) ...
-
-from app.database import Base, engine, SessionLocal
-# CRITICAL FIX: Explicitly import ALL models so metadata knows about them
+from contextlib import asynccontextmanager
+from sqlalchemy import text
+from app.database import engine, Base, SessionLocal
 from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
 
-fastapi_app = FastAPI(title="S.C.O.P.E. Assessment Gateway", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(app):
+    Base.metadata.create_all(bind=engine)
+    with SessionLocal() as db:
+        try:
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS submission_payload TEXT;"))
+            db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_secret VARCHAR;"))
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_secret VARCHAR;"))
+            db.commit()
+        except Exception:
+            db.rollback()
+    yield
+
+fastapi_app = FastAPI(title="S.C.O.P.E. Assessment Gateway", version="2.0.0", lifespan=lifespan)
 
 fastapi_app.state.limiter = limiter
 fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

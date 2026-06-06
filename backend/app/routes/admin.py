@@ -9,10 +9,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel, field_validator
-
+from cryptography.fernet import Fernet
+import base64
 from app.database import get_db
-# 🚀 Added the new models to the import
 from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase
+
+ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "b3Nf8x_T2lQ4vG9b_X1vR5wP3yL8sJ2nR7tC6qK9hM0=")
+cipher_suite = Fernet(ENCRYPTION_KEY.encode('utf-8'))
 
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 router = APIRouter()
@@ -68,8 +71,8 @@ class ExamCreatePayload(BaseModel):
     start_password:      str
     end_password:        Optional[str]  = None
     status:              str            = "upcoming"
-    
-    # 🚀 Nested arrays for dynamic content
+    start_password_changed: Optional[bool] = None
+    end_password_changed: Optional[bool] = None
     questions:           List[QuestionPayload] = []
     coding_problems:     List[CodingProblemPayload] = []
 
@@ -95,21 +98,19 @@ def create_exam(
         exam_id = f"exam_{uuid.uuid4().hex[:8]}"
 
         # 1. Hash Passwords
-        start_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        start_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
         end_hash = None
         if payload.end_password:
-            end_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            end_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+        enc_start = cipher_suite.encrypt(payload.start_password.encode("utf-8")).decode("utf-8") if payload.start_password else None
+        enc_end = cipher_suite.encrypt(payload.end_password.encode("utf-8")).decode("utf-8") if payload.end_password else None
 
         new_exam = Exam(
-            id=exam_id, 
-            title=payload.title, 
-            duration_seconds=payload.duration_minutes * 60,
-            starts_at=payload.starts_at / 1000.0, 
-            status=payload.status,
-            start_password_hash=start_hash, 
-            end_password_hash=end_hash,
-            start_secret=payload.start_password, # 🚀 ADD THIS
-            end_secret=payload.end_password      # 🚀 ADD THIS
+            id=exam_id, title=payload.title, duration_seconds=payload.duration_minutes * 60,
+            starts_at=payload.starts_at / 1000.0, status=payload.status,
+            start_password_hash=start_hash, end_password_hash=end_hash,
+            start_secret=enc_start, end_secret=enc_end 
         )
         db.add(new_exam)
 
@@ -184,13 +185,13 @@ def update_exam(
         exam.starts_at = payload.starts_at / 1000.0
         exam.status = payload.status
 
-        if payload.start_password and not payload.start_password.startswith("$2b$"):
-            exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            exam.start_secret = payload.start_password 
+        if payload.start_password_changed is not False and payload.start_password:
+            exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+            exam.start_secret = cipher_suite.encrypt(payload.start_password.encode("utf-8")).decode("utf-8")
             
-        if payload.end_password and not payload.end_password.startswith("$2b$"):
-            exam.end_password_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            exam.end_secret = payload.end_password     
+        if payload.end_password_changed is not False and payload.end_password:
+            exam.end_password_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+            exam.end_secret = cipher_suite.encrypt(payload.end_password.encode("utf-8")).decode("utf-8") 
 
         # 2. Purge old nested data (Cascades will handle test cases)
         db.query(Question).filter(Question.exam_id == exam_id).delete()
@@ -286,6 +287,8 @@ def get_exam_analytics(
         for cp in coding_probs:
             cp_data = code_answers.get(cp.id)
             if cp_data:
+                # TODO: Replace cp_data.get("score") with server-computed score once Judge0 is integrated. 
+                # Client-submitted scores are NOT trusted for production grading.
                 cod_score += cp_data.get("score", 0)
                 coding_submissions.append({
                     "problemId": cp.id,
@@ -351,26 +354,26 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
         "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps]
     }}
 
-# ── 2. GET LIVE MONITOR DATA ───────────────────────────────────────────────────
 @router.get("/exams/{exam_id}/monitor")
 def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
     sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False).all()
     
-    active_now = 0
-    total_submitted = 0
-    student_data = []
-    
+    session_ids = [s.id for s in sessions]
+    violation_counts = {}
+    if session_ids:
+        v_data = db.query(ViolationLog.session_id, func.count(ViolationLog.id)).filter(ViolationLog.session_id.in_(session_ids)).group_by(ViolationLog.session_id).all()
+        violation_counts = {row[0]: row[1] for row in v_data}
+
+    active_now = 0; total_submitted = 0; student_data = []
     for s in sessions:
         if s.is_submitted: total_submitted += 1
         else: active_now += 1
             
-        violations = db.query(ViolationLog).filter(ViolationLog.session_id == s.id).count()
+        violations = violation_counts.get(s.id, 0)
         student_data.append({
-            "student_id": s.student_id,
-            "session_id": s.id,
-            "submitted": s.is_submitted,
-            "total_violations": violations,
+            "student_id": s.student_id, "session_id": s.id,
+            "submitted": s.is_submitted, "total_violations": violations,
             "joined_at": s.created_at
         })
         
@@ -422,16 +425,6 @@ def list_students(
     db: Session = Depends(get_db),
 ):
     """Fetch all students. Includes root-level schema self-healing."""
-    
-    # 🚀 ROOT FIX 1: Auto-Migrate missing columns silently without manual SQL patching
-    try:
-        db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE;"))
-        db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS submission_payload TEXT;"))
-        db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.warning(f"Auto-migration skipped: {e}")
 
     query = db.query(TokenRegistry)
     if exam_id:
@@ -479,13 +472,6 @@ def list_students(
 def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     import secrets
 
-    # Ensure schema is ready
-    try:
-        db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
-        db.commit()
-    except Exception:
-        db.rollback()
-
     for s in payload.students:
         # 🚀 ROOT FIX 2: Upsert Logic (Check if student already exists for this exam)
         existing_record = db.query(TokenRegistry).filter(
@@ -493,7 +479,7 @@ def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin
             TokenRegistry.exam_id == s.exam_id
         ).first()
         
-        hashed = bcrypt.hashpw(s.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        hashed = bcrypt.hashpw(s.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
         
         if existing_record:
             # UPDATE: Overwrite password and reactivate, but KEEP the same token
@@ -520,7 +506,7 @@ def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(
     if not record: raise HTTPException(status_code=404)
     record.is_active = payload.is_active
     if payload.password:
-        record.password_hash = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        record.password_hash = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
     db.commit()
     return {"success": True}
 
@@ -532,14 +518,7 @@ def delete_student(token: str, _: bool = Depends(verify_admin), db: Session = De
 
 # ── 2. REPLACE YOUR EXISTING list_exams FUNCTION WITH THIS ──
 @router.get("/exams")
-def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
-    # Auto-Migrate the new secret columns securely
-    try:
-        db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_secret VARCHAR;"))
-        db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_secret VARCHAR;"))
-        db.commit()
-    except Exception:
-        db.rollback()
+def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):    
 
     exams = db.query(Exam).all()
     now = time.time()
@@ -560,12 +539,19 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
             elif now <= end_at: computed_status = "live"
             else: computed_status = "completed"
 
+        dec_start, dec_end = "********", "********"
+        try:
+            if exam.start_secret: dec_start = cipher_suite.decrypt(exam.start_secret.encode("utf-8")).decode("utf-8")
+            if exam.end_secret: dec_end = cipher_suite.decrypt(exam.end_secret.encode("utf-8")).decode("utf-8")
+        except Exception:
+            pass
+
         stats = counts_map.get(exam.id, {"total": 0, "submitted": 0})
         result.append({
             "id": exam.id, "title": exam.title, "duration_minutes": exam.duration_seconds // 60,
             "starts_at_ms": exam.starts_at * 1000, "status": computed_status,
             "participants": stats["total"], "submitted": stats["submitted"],
-            "start_password": exam.start_secret, "end_password": exam.end_secret # 🚀 Now forwarded to frontend
+            "start_password": dec_start, "end_password": dec_end 
         })
     return {"success": True, "data": result}
 

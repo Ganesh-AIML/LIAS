@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense, useMemo } from 'react';
+import { useState, useEffect, lazy, Suspense, useMemo, useRef} from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import io from 'socket.io-client';
 import {
@@ -160,6 +160,38 @@ export default function ExamWorkspace() {
     [flatQuestions]
   );
 
+
+  // 🛡️ AUTO-SUBMIT: Exponential Retry Queue
+  const attemptAutoSubmit = async (retryCount = 0) => {
+    setIsSubmitting(true);
+    try {
+      await api.post(`/exam/${examId}/submit`, { answers, autoSubmit: true });
+      ['answers', 'codes', 'active_lang', 'active_source'].forEach(key => localStorage.removeItem(`scope_${key}_${examId}`));
+      navigate('/dashboard');
+    } catch (err) {
+      if (retryCount < 5) {
+        // 🚀 C-04: Exponential backoff (1s, 2s, 4s, 8s, 16s)
+        const delay = Math.pow(2, retryCount) * 1000;
+        setToastMessage(`Network error. Retrying submission in ${delay/1000}s... Please do not close this page.`);
+        setTimeout(() => attemptAutoSubmit(retryCount + 1), delay);
+      } else {
+        setToastMessage("Critical: Auto-submit failed. Your answers are saved locally. Please contact your invigilator immediately.");
+        setIsSubmitting(false); // Leaves them on the page to manually retry when WiFi returns
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isTimeUp && !isSubmitting) {
+      setTimeout(() => {
+        setToastMessage("⏳ Time has expired. Auto-submitting exam...");
+        attemptAutoSubmit();
+      }, 0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTimeUp]);
+
+
   // 🛡️ AUTO-SAVE: Cache answers
   useEffect(() => {
     if (Object.keys(answers).length > 0) {
@@ -192,23 +224,30 @@ export default function ExamWorkspace() {
   }, [toastMessage]);
 
   // Socket Live Timer Sync
+  const socketRef = useRef(null);
   useEffect(() => {
     const socketURL = import.meta.env.VITE_API_URL;
-    const socket = io(socketURL);
-    const jwt = useAuthStore.getState().sessionJwt;
-    if (jwt) {
-      socket.emit('join_exam_room', { exam_id: examId, token: jwt });
-    }
     
-    socket.on('exam_time_synced', (updatedTimes) => {
-      setExamData((prevData) => {
-        if (!prevData) return prevData;
-        return { ...prevData, duration: updatedTimes.duration, codingDuration: updatedTimes.codingDuration || prevData.codingDuration };
+    // 🚀 H-06: Ensure only one socket exists per client
+    if (!socketRef.current) {
+      socketRef.current = io(socketURL);
+      const jwt = useAuthStore.getState().sessionJwt;
+      if (jwt) socketRef.current.emit('join_exam_room', { exam_id: examId, token: jwt });
+      
+      socketRef.current.on('exam_time_synced', (updatedTimes) => {
+        setExamData((prev) => ({ 
+          ...prev, duration: updatedTimes.duration, codingDuration: updatedTimes.codingDuration || prev.codingDuration 
+        }));
+        setToastMessage("⏱️ The invigilator has adjusted the exam duration."); 
       });
-      setToastMessage("⏱️ The invigilator has adjusted the exam duration."); 
-    });
+    }
 
-    return () => socket.disconnect();
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
   }, [examId]);
 
   // ── ANTI-CHEAT ENGINE ──────────────────────────────────────────────────────

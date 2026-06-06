@@ -177,6 +177,11 @@ useEffect(() => {
   };
 
   const handleLogout = () => {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('scope_')) {
+        localStorage.removeItem(key);
+      }
+    });
     clearSession();
     navigate('/');
   };
