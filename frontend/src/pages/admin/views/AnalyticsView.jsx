@@ -4,7 +4,7 @@ import {
   BookOpen, Code2, BrainCircuit, BarChart2, Download,
   TrendingUp, Award, Database, Search, X, XCircle
 } from 'lucide-react';
-
+import AnswerRenderer from '../../../components/exam/AnswerRenderer';
 import { adminApi } from '../../../hooks/useAdminApi'; // Adjust path if necessary
 
 // --- HELPER: CSV EXPORT ENGINE ---
@@ -56,7 +56,7 @@ const exportToExcel = (students, testName, questions = [], codingProbs = []) => 
 };
 
 // --- SUB-COMPONENT: STUDENT DETAIL MODAL ---
-const StudentDetailModal = ({ student, onClose }) => {
+const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
   const [activeCodeTab, setActiveCodeTab] = useState(0);
 
   if (!student) return null;
@@ -188,6 +188,29 @@ const StudentDetailModal = ({ student, onClose }) => {
               </div>
             )}
           </div>
+
+          {subjectiveQuestions.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <BookOpen size={18} className="text-cyan-600"/>
+                <h3 className="font-bold text-slate-900">Subjective Answers</h3>
+              </div>
+
+              {subjectiveQuestions.map((sq) => {
+                const answer = student.subjectiveAnswers?.[sq.id];
+                return (
+                  <div key={sq.id} className="border border-slate-200 rounded-xl p-4 space-y-2">
+                    <p className="text-sm font-bold text-slate-700">{sq.text}</p>
+                    {answer ? (
+                      <AnswerRenderer markdown={answer} />
+                    ) : (
+                      <p className="text-slate-400 text-sm italic">No answer provided.</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -266,8 +289,8 @@ export default function AnalyticsView({ test, onBack }) {
     if (test?.id) fetchData();
   }, [test]);
 
-  const { allStudents, questions, codingProbs } = useMemo(() => {
-    if (!analyticsData) return { allStudents: [], questions: [], codingProbs: [] };
+  const { allStudents, questions, codingProbs, subjectiveQuestions } = useMemo(() => {
+    if (!analyticsData) return { allStudents: [], questions: [], codingProbs: [], subjectiveQuestions: [] };
     
     // In Task 5.5, the backend will return actual submission data.
     // For now, we safely map whatever is available or default to 0.
@@ -284,7 +307,8 @@ export default function AnalyticsView({ test, onBack }) {
         status: r.submitted ? 'Finished' : 'In Progress',
         percentile: 0,
         sectionScores: {},
-        codingSubmissions: r.coding_submissions || []
+        codingSubmissions: r.coding_submissions || [],
+        subjectiveAnswers: r.subjective_answers || {}
       };
     });
 
@@ -296,7 +320,8 @@ export default function AnalyticsView({ test, onBack }) {
     return { 
       allStudents: students, 
       questions: analyticsData.questions || [], 
-      codingProbs: analyticsData.coding_problems || [] 
+      codingProbs: analyticsData.coding_problems || [],
+      subjectiveQuestions: analyticsData.subjective_questions || []
     };
   }, [analyticsData]);
 
@@ -329,7 +354,7 @@ export default function AnalyticsView({ test, onBack }) {
   return (
     <div className="space-y-5 pb-16 animate-in fade-in duration-300">
       
-      <StudentDetailModal student={selectedStudentDetail} onClose={() => setSelectedStudentDetail(null)} />
+      <StudentDetailModal student={selectedStudentDetail} subjectiveQuestions={subjectiveQuestions} onClose={() => setSelectedStudentDetail(null)} />
 
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">

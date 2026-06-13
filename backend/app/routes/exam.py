@@ -2,15 +2,15 @@ import time
 import json
 import bcrypt
 import logging
-from typing import Literal, Dict, Any
+from typing import Literal, Dict, Any, Optional 
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from pydantic import BaseModel, ValidationError, Field
+from pydantic import BaseModel, ValidationError, Field, field_validator
 from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase
+from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion
 from app.limiter import limiter
 
 router = APIRouter()
@@ -32,8 +32,24 @@ class ViolationPayload(BaseModel):
 
 
 class SubmitPayload(BaseModel):
-    answers:    dict
+    answers:    dict           # MCQ: { question_id: "A" }
     autoSubmit: bool = False
+    subjective: Optional[dict] = None   # { question_id: "markdown string" }
+
+    @field_validator('subjective')
+    @classmethod
+    def validate_subjective(cls, v):
+        if v is None:
+            return v
+        import re
+        for qid, text in v.items():
+            if not isinstance(text, str):
+                raise ValueError("Subjective answer must be a string.")
+            if len(text) > 10000:
+                raise ValueError(f"Answer for {qid} exceeds 10,000 character limit.")
+            if re.search(r'<[a-zA-Z][^>]*>', text):
+                raise ValueError(f"Answer for {qid} contains disallowed HTML.")
+        return v
 
 
 class PasswordVerifyPayload(BaseModel):
@@ -189,6 +205,12 @@ def load_exam_workspace(
             "constraints": cp.constraints or "",
             "marks":       10  # Standard point allocation weight
         })
+    
+    db_subjective = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
+    formatted_subjective = [
+        {"id": sq.id, "text": sq.text, "section": sq.section, "marks": sq.marks}
+        for sq in db_subjective
+    ]
 
     return {
         "success": True,
@@ -200,6 +222,7 @@ def load_exam_workspace(
             "maxViolations":  3,
             "codingProblems": formatted_coding,
             "sections":       formatted_sections,
+            "subjectiveQuestions": formatted_subjective
         },
     }
 
@@ -268,6 +291,8 @@ def submit_exam(
         
     # 🚀 Crucial Fix: Saves live response telemetry to feed the grading analytics engines
     active_session.submission_payload = json.dumps(payload.answers)
+    if payload.subjective:
+        active_session.subjective_payload = json.dumps(payload.subjective)
     active_session.is_submitted = True
     
     db.commit()

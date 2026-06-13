@@ -11,7 +11,7 @@ from app.limiter import limiter
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from app.database import engine, Base, SessionLocal
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
@@ -52,6 +52,17 @@ fastapi_app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 # ── ROOT FIX: Create tables synchronously on module load ──
 logger.info("🚀 Initializing S.C.O.P.E. Database Tables...")
 Base.metadata.create_all(bind=engine)
+def _run_additive_migrations():
+    with SessionLocal() as db:
+        from sqlalchemy import text
+        try:
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS subjective_payload TEXT;"))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning("Migration skipped: %s", e)
+
+_run_additive_migrations()
 # ──────────────────────────────────────────────────────────
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=os.getenv("ALLOWED_ORIGINS", "").split(","))

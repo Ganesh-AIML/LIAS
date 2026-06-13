@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
 import base64
 from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "b3Nf8x_T2lQ4vG9b_X1vR5wP3yL8sJ2nR7tC6qK9hM0=")
 cipher_suite = Fernet(ENCRYPTION_KEY.encode('utf-8'))
@@ -64,6 +64,20 @@ class CodingProblemPayload(BaseModel):
     languages: str
     testCases: List[TestCasePayload] = []
 
+class SubjectiveQuestionPayload(BaseModel):
+    section: str
+    text: str
+    marks: int = 10
+
+    @field_validator('text')
+    @classmethod
+    def text_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Question text cannot be empty.")
+        if len(v) > 2000:
+            raise ValueError("Question text too long.")
+        return v
+
 class ExamCreatePayload(BaseModel):
     title:               str
     duration_minutes:    int
@@ -75,6 +89,7 @@ class ExamCreatePayload(BaseModel):
     end_password_changed: Optional[bool] = None
     questions:           List[QuestionPayload] = []
     coding_problems:     List[CodingProblemPayload] = []
+    subjective_questions: List[SubjectiveQuestionPayload] = []
 
     @field_validator("title")
     @classmethod
@@ -153,6 +168,15 @@ def create_exam(
                 )
                 db.add(new_tc)
 
+        for idx, sq in enumerate(payload.subjective_questions):
+            db.add(SubjectiveQuestion(
+                id      = f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                exam_id = exam_id,
+                section = sq.section,
+                text    = sq.text,
+                marks   = sq.marks,
+            ))
+
         # 5. Atomic Commit (All or Nothing)
         db.commit()
         return {"success": True, "exam_id": exam_id, "message": "Exam created successfully"}
@@ -196,6 +220,7 @@ def update_exam(
         # 2. Purge old nested data (Cascades will handle test cases)
         db.query(Question).filter(Question.exam_id == exam_id).delete()
         db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete()
+        db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete()
 
         # 3. Re-insert new Questions
         for idx, q in enumerate(payload.questions):
@@ -222,6 +247,14 @@ def update_exam(
                     expected_output=tc.output, is_hidden=tc.isHidden
                 )
                 db.add(new_tc)
+        for idx, sq in enumerate(payload.subjective_questions):
+            db.add(SubjectiveQuestion(
+            id      = f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+            exam_id = exam_id,
+            section = sq.section,
+            text    = sq.text,
+            marks   = sq.marks,
+            ))
 
         db.commit()
         return {"success": True, "message": "Exam updated successfully"}
@@ -264,6 +297,12 @@ def get_exam_analytics(
         cod_score = 0
         coding_submissions = []
 
+        subj_payload = {}
+        if s.subjective_payload:
+            try:
+                subj_payload = json.loads(s.subjective_payload)
+            except Exception:
+                pass
         # Safely parse submission JSON
         payload = {}
         if s.submission_payload:
@@ -321,9 +360,9 @@ def get_exam_analytics(
             "apt_score": apt_score,
             "tech_score": tech_score,
             "cod_score": cod_score,
-            "coding_submissions": coding_submissions
+            "coding_submissions": coding_submissions,
+            "subjective_answers": subj_payload
         })
-
     # 3. Return Payload matching AnalyticsView.jsx expectations
     return {
         "success": True,
@@ -332,6 +371,7 @@ def get_exam_analytics(
             "title": exam.title,
             "questions": [{"id": q.id, "section": q.section, "text": q.text} for q in questions],
             "coding_problems": [{"id": cp.id, "title": cp.title} for cp in coding_probs],
+            "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text} for sq in db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()],
             "students": student_results
         }
     }
@@ -345,13 +385,15 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
     
     qs = db.query(Question).filter(Question.exam_id == exam_id).all()
     cps = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+    sqs = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
     
     return {"success": True, "data": {
         "id": exam.id,
         "title": exam.title,
         "duration_minutes": exam.duration_seconds // 60,
         "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans} for q in qs],
-        "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps]
+        "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps],
+        "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text, "marks": sq.marks} for sq in sqs]
     }}
 
 @router.get("/exams/{exam_id}/monitor")
@@ -574,7 +616,7 @@ def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Dep
         db.query(Question).filter(Question.exam_id == exam_id).delete(synchronize_session=False)
         db.query(ExamSession).filter(ExamSession.exam_id == exam_id).delete(synchronize_session=False)
         db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).delete(synchronize_session=False)
-
+        db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete(synchronize_session=False)
         # 4. Finally, safely delete the parent Exam
         db.query(Exam).filter(Exam.id == exam_id).delete(synchronize_session=False)
         db.commit()

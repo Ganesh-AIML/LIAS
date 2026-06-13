@@ -30,6 +30,7 @@ class Exam(Base):
     questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")
     coding_problems = relationship("CodingProblem", back_populates="exam", cascade="all, delete-orphan")
     sessions        = relationship("ExamSession", back_populates="exam", cascade="all, delete-orphan")
+    subjective_questions = relationship("SubjectiveQuestion", back_populates="exam", cascade="all, delete-orphan")
 
 class ExamSession(Base):
     __tablename__ = "exam_sessions"
@@ -40,8 +41,7 @@ class ExamSession(Base):
     is_revoked         = Column(Boolean, default=False)
     is_submitted       = Column(Boolean, default=False)
     created_at         = Column(Float, default=time.time)
-    
-    submission_payload = Column(Text, nullable=True) 
+    subjective_payload = Column(Text, nullable=True)
 
     exam = relationship("Exam", back_populates="sessions")
     violations = relationship("ViolationLog", back_populates="session", cascade="all, delete-orphan")
@@ -106,3 +106,13 @@ class TestCase(Base):
     is_hidden       = Column(Boolean, default=False)
     
     problem = relationship("CodingProblem", back_populates="test_cases")
+
+
+class SubjectiveQuestion(Base):
+    __tablename__ = "subjective_questions"
+    id       = Column(String, primary_key=True, index=True)
+    exam_id  = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False, index=True)
+    section  = Column(String, nullable=False)   # display label e.g. "Theory"
+    text     = Column(Text, nullable=False)
+    marks    = Column(Integer, default=10)
+    exam     = relationship("Exam", back_populates="subjective_questions")

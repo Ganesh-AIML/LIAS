@@ -37,7 +37,9 @@ export default function ScheduleTest({ initialData, onBack }) {
     start_password: initialData?.start_password_hash || "", // Hashed version stored temporarily if draft
     end_password: initialData?.end_password_hash || "",
   });
+  
 
+  const [subjectiveQuestions, setSubjectiveQuestions] = useState(initialData?.subjective_questions || []);
   const [questions, setQuestions] = useState(initialData?.questions || []);
   const [codingProblems, setCodingProblems] = useState(
     initialData?.coding_problems || [],
@@ -63,7 +65,10 @@ export default function ScheduleTest({ initialData, onBack }) {
     setQuestions(
       questions.map((q) => (q.id === id ? { ...q, [field]: value } : q)),
     );
-
+    const generateSqId = () => `sq_${Math.random().toString(36).substr(2, 9)}`;
+const addSubjectiveQ  = () => setSubjectiveQuestions(prev => [...prev, { id: generateSqId(), section: 'Theory', text: '', marks: 10 }]);
+const removeSubjectiveQ = (id) => setSubjectiveQuestions(prev => prev.filter(q => q.id !== id));
+const updateSubjectiveQ = (id, field, value) => setSubjectiveQuestions(prev => prev.map(q => q.id === id ? { ...q, [field]: value } : q));
   // Feature: Aiken Format Import
   const handleAikenImport = (e) => {
     const file = e.target.files[0];
@@ -140,6 +145,7 @@ export default function ScheduleTest({ initialData, onBack }) {
         status: status,
         questions: questions,
         coding_problems: codingProblems,
+        subjective_questions: subjectiveQuestions,
       };
 
       // Feature: Check if PUT (Edit) or POST (Create)
@@ -204,6 +210,12 @@ export default function ScheduleTest({ initialData, onBack }) {
               {codingProblems.length}
             </span>
           </button>
+          <button
+  onClick={() => setActiveTab("subjective")}
+  className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === "subjective" ? "bg-white text-cyan-600 shadow-sm" : "text-slate-500"}`}
+>
+  Subjective
+</button>
         </div>
       </div>
 
@@ -405,6 +417,63 @@ export default function ScheduleTest({ initialData, onBack }) {
             problems={codingProblems}
             setProblems={setCodingProblems}
           />
+        )}
+
+        
+        {activeTab === "subjective" && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+            {subjectiveQuestions.map((sq, idx) => (
+              <div key={sq.id} className="border border-slate-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-slate-500">Question {idx + 1}</span>
+                  <button
+                    onClick={() => removeSubjectiveQ(sq.id)}
+                    className="text-rose-500 hover:text-rose-700 text-sm font-bold"
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Section</label>
+                  <input
+                    type="text"
+                    value={sq.section}
+                    onChange={(e) => updateSubjectiveQ(sq.id, "section", e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mt-1"
+                    placeholder="e.g. Theory"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Question Text</label>
+                  <textarea
+                    value={sq.text}
+                    onChange={(e) => updateSubjectiveQ(sq.id, "text", e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mt-1 min-h-[100px]"
+                    placeholder="Enter the subjective question text"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Marks</label>
+                  <input
+                    type="number"
+                    value={sq.marks}
+                    onChange={(e) => updateSubjectiveQ(sq.id, "marks", parseInt(e.target.value) || 0)}
+                    className="w-32 border border-slate-200 rounded-lg px-3 py-2 text-sm mt-1"
+                  />
+                </div>
+              </div>
+            ))}
+
+            <button
+              onClick={addSubjectiveQ}
+              className="flex items-center gap-2 px-4 py-2 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 font-bold rounded-lg text-sm transition-colors"
+            >
+              + Add Subjective Question
+            </button>
+          </div>
         )}
       </div>
 
