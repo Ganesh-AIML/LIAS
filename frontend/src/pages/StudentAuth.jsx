@@ -85,7 +85,9 @@ try {
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-indigo-600/10 rounded-full -translate-x-1/2 translate-y-1/2"></div>
 
         <div className="relative z-10 flex items-center">
-          <img src="/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
+          <div className="bg-white rounded-xl px-4 py-2 shadow-sm">
+            <img src="/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
+          </div>
         </div>
 
         <div className="relative z-10 max-w-sm">

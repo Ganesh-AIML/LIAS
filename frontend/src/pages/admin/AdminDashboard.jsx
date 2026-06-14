@@ -103,12 +103,7 @@ export default function AdminDashboard() {
             
             <div className="flex items-center gap-6">
               <div className="flex items-center gap-2 cursor-pointer" onClick={goHome}>
-                <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center">
-                  <Shield size={18} className="text-white" />
-                </div>
-                <h1 className="text-xl font-black tracking-tight text-slate-800">
-                  LIAS <span className="text-blue-700">Admin</span>
-                </h1>
+                <img src="/Main-Logo.png" alt="LIAS" className="h-9 w-auto object-contain" />
               </div>
 
               {/* Global Quick Actions */}
