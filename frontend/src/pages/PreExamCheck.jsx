@@ -205,7 +205,7 @@ export default function PreExamCheck() {
     <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center justify-center font-sans">
       <div className="w-full max-w-5xl mb-6">
         <div className="flex items-center gap-2 mb-3">
-            <img src="/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
+            <img src="/Main-Logo.png" alt="LIAS" className="h-16 w-auto object-contain" />
           </div>
         <h1 className="text-3xl font-black text-slate-900 tracking-tight">System Pre-Check</h1>
         <p className="text-slate-500 mt-2 font-medium">Verify your environment before beginning.</p>

@@ -45,7 +45,7 @@ function AdminLoginGate({ onSuccess }) {
       <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-xl border border-slate-200">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mx-auto mb-4">
-            <img src="/Main-Logo.png" alt="LIAS" className="h-14 w-auto object-contain" />
+            <img src="/Main-Logo.png" alt="LIAS" className="h-25 w-auto object-contain" />
           </div>
           <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">Admin Portal</h1>
           <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Unified Control Center</p>
@@ -103,7 +103,7 @@ export default function AdminDashboard() {
             
             <div className="flex items-center gap-6">
               <div className="flex items-center gap-2 cursor-pointer" onClick={goHome}>
-                <img src="/Main-Logo.png" alt="LIAS" className="h-9 w-auto object-contain" />
+                <img src="/Main-Logo.png" alt="LIAS" className="h-20 w-auto object-contain" />
               </div>
 
               {/* Global Quick Actions */}

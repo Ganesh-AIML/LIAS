@@ -86,7 +86,7 @@ try {
 
         <div className="relative z-10 flex items-center">
           <div className="bg-white rounded-xl px-4 py-2 shadow-sm">
-            <img src="/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
+            <img src="/Main-Logo.png" alt="LIAS" className="h-16 w-auto object-contain" />
           </div>
         </div>
 
@@ -117,7 +117,7 @@ try {
         <div className="w-full max-w-sm">
           <div className="text-center lg:text-left mb-8">
             <div className="lg:hidden inline-flex items-center gap-2 mb-4">
-              <img src="/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
+              <img src="/Main-Logo.png" alt="LIAS" className="h-16 w-auto object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h1>
             <p className="text-sm text-slate-500 mt-1">Sign in with your student credentials to continue.</p>
