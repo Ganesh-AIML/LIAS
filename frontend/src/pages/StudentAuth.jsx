@@ -84,11 +84,8 @@ try {
         <div className="absolute -top-24 -right-24 w-72 h-72 bg-white/5 rounded-full"></div>
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-indigo-600/10 rounded-full -translate-x-1/2 translate-y-1/2"></div>
 
-        <div className="relative z-10 flex items-center gap-2.5">
-          <div className="w-9 h-9 bg-white/10 border border-white/20 rounded-lg flex items-center justify-center">
-            <Activity size={18} className="text-white" />
-          </div>
-          <span className="text-white font-bold text-lg tracking-tight">LIAS</span>
+        <div className="relative z-10 flex items-center">
+          <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
         </div>
 
         <div className="relative z-10 max-w-sm">
@@ -118,8 +115,7 @@ try {
         <div className="w-full max-w-sm">
           <div className="text-center lg:text-left mb-8">
             <div className="lg:hidden inline-flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center"><Activity size={17} className="text-white" /></div>
-              <span className="font-bold text-lg tracking-tight text-slate-900">LIAS</span>
+              <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h1>
             <p className="text-sm text-slate-500 mt-1">Sign in with your student credentials to continue.</p>

@@ -44,10 +44,10 @@ function AdminLoginGate({ onSuccess }) {
     <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-4 font-sans">
       <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-xl border border-slate-200">
         <div className="text-center mb-8">
-          <div className="w-12 h-12 bg-blue-900 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-            <Shield size={26} className="text-white" />
+          <div className="flex items-center justify-center mx-auto mb-4">
+            <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-14 w-auto object-contain" />
           </div>
-          <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">LIAS Admin</h1>
+          <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">Admin Portal</h1>
           <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Unified Control Center</p>
         </div>
         

@@ -238,10 +238,8 @@ useEffect(() => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center"><Activity size={17} className="text-white" /></div>
+              <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold tracking-tight text-slate-900">LIAS</h1>
-                <span className="text-xs font-bold text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 leading-none">Student</span>
                 {liveExams.length > 0 && (
                   <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
                     <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
