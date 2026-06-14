@@ -55,7 +55,7 @@ const exportToExcel = (students, testName, questions = [], codingProbs = []) => 
   document.body.removeChild(a);
 };
 
-// --- SUB-COMPONENT: STUDENT DETAIL MODAL ---
+// --- SUB-COMPONENT: STUDENT DETAIL SLIDE-OVER ---
 const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
   const [activeCodeTab, setActiveCodeTab] = useState(0);
 
@@ -65,65 +65,71 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
   const activeSub = codingSubs[activeCodeTab];
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in duration-200">
-        
-        <div className="p-6 border-b flex justify-between items-center bg-slate-50">
+    <div className="fixed inset-0 z-[60] flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-white w-full max-w-2xl h-full shadow-2xl flex flex-col overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white shrink-0">
           <div>
             <h2 className="text-xl font-black text-slate-900">{student.student_id}</h2>
-            <p className="text-sm text-slate-500 font-mono">{student.dept}</p>
+            <p className="text-sm text-slate-400 font-mono">{student.dept}</p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X size={20} /></button>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-500"><X size={18} /></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-cyan-50 p-4 rounded-xl border border-cyan-100">
-              <p className="text-[10px] font-bold text-cyan-600 uppercase">Total Score</p>
-              <p className="text-2xl font-black text-cyan-900">{student.total}</p>
-            </div>
-            <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-              <p className="text-[10px] font-bold text-indigo-600 uppercase">Aptitude</p>
-              <p className="text-2xl font-black text-indigo-900">{student.aptScore}</p>
-            </div>
-            <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-              <p className="text-[10px] font-bold text-emerald-600 uppercase">Technical</p>
-              <p className="text-2xl font-black text-emerald-900">{student.techScore}</p>
-            </div>
-            <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
-              <p className="text-[10px] font-bold text-purple-600 uppercase">Overall Percentile</p>
-              <p className="text-2xl font-black text-purple-900">{student.percentile}th</p>
-            </div>
+        {/* Score chips */}
+        <div className="grid grid-cols-4 gap-3 p-6 border-b border-slate-100 shrink-0">
+          <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 text-center">
+            <p className="text-[10px] font-bold text-blue-600 uppercase">Total</p>
+            <p className="text-xl font-black text-blue-900">{student.total}</p>
           </div>
+          <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 text-center">
+            <p className="text-[10px] font-bold text-indigo-600 uppercase">Apt</p>
+            <p className="text-xl font-black text-indigo-900">{student.aptScore}</p>
+          </div>
+          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-center">
+            <p className="text-[10px] font-bold text-emerald-600 uppercase">Tech</p>
+            <p className="text-xl font-black text-emerald-900">{student.techScore}</p>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+            <p className="text-[10px] font-bold text-slate-500 uppercase">Pct</p>
+            <p className="text-xl font-black text-slate-800">{student.percentile}th</p>
+          </div>
+        </div>
 
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+
+          {/* Coding Submissions */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
-              <Code2 size={18} className="text-cyan-600"/>
-              <h3 className="font-bold text-slate-900">Coding Submissions</h3>
+              <Code2 size={16} className="text-blue-600"/>
+              <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wider">Coding Submissions</h3>
             </div>
-            
+
             {codingSubs.length > 0 ? (
               <div className="flex flex-col gap-4">
-                <div className="flex gap-2 overflow-x-auto bg-slate-100 p-2 rounded-xl border border-slate-200">
+                <div className="flex gap-2 overflow-x-auto bg-slate-100 p-1.5 rounded-xl border border-slate-200">
                   {codingSubs.map((sub, idx) => (
-                    <button 
+                    <button
                       key={idx}
                       onClick={() => setActiveCodeTab(idx)}
-                      className={`px-5 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${
-                        activeCodeTab === idx 
-                          ? 'bg-cyan-600 text-white shadow-md' 
+                      className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${
+                        activeCodeTab === idx
+                          ? 'bg-blue-600 text-white shadow-sm'
                           : 'bg-white text-slate-600 hover:bg-slate-50 shadow-sm border border-slate-200'
                       }`}
                     >
-                      {sub.problemTitle} 
+                      {sub.problemTitle}
                       {!sub.isAttempted && <span className="text-red-400 ml-1.5 text-[10px] uppercase">Unattempted</span>}
                     </button>
                   ))}
                 </div>
 
                 {activeSub && (
-                  <div className="animate-in fade-in duration-300">
+                  <div>
                     {activeSub.isAttempted ? (
                       <>
                         <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -131,35 +137,33 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
                             <span className="text-xs font-bold text-slate-400 uppercase">Submission Details</span>
                             <div className="flex gap-4">
                               <span className="text-xs font-bold text-emerald-400">Avg Time: {activeSub.runtime || '0.000'}s</span>
-                              <span className="text-xs font-bold text-cyan-400">Peak Memory: {activeSub.memory || '0'} KB</span>
+                              <span className="text-xs font-bold text-blue-400">Peak Memory: {activeSub.memory || '0'} KB</span>
                             </div>
                           </div>
-                          <pre className="p-6 bg-slate-900 text-emerald-500 font-mono text-sm overflow-x-auto max-h-[400px]">
+                          <pre className="p-6 bg-slate-900 text-emerald-500 font-mono text-sm overflow-x-auto max-h-[300px]">
                             <code>{activeSub.submittedCode || "// Code unavailable"}</code>
                           </pre>
                         </div>
 
                         {activeSub.testResults && (
-                          <div className="mt-6 space-y-4 animate-in fade-in slide-in-from-bottom-4">
-                            <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-2">
-                              <CheckCircle size={16} className="text-emerald-500" />
-                              Detailed Test Case Breakdown
+                          <div className="mt-4 space-y-3">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                              <CheckCircle size={14} className="text-emerald-500" />
+                              Test Case Breakdown
                             </h4>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 gap-3">
                               {activeSub.testResults.map((tc, idx) => (
-                                <div key={idx} className={`p-4 rounded-xl border transition-all ${
+                                <div key={idx} className={`p-3 rounded-xl border ${
                                   tc.status === 'Passed'
-                                    ? 'bg-emerald-50/50 border-emerald-200 shadow-sm'
-                                    : 'bg-red-50/50 border-red-200 shadow-sm'
+                                    ? 'bg-emerald-50/50 border-emerald-200'
+                                    : 'bg-red-50/50 border-red-200'
                                 }`}>
-                                  
-                                  <div className="flex justify-between items-center mb-3 border-b border-slate-200/50 pb-2">
+                                  <div className="flex justify-between items-center">
                                     <span className="font-bold text-sm text-slate-800 flex items-center gap-2">
                                       Case {tc.testCase}
-                                      {tc.isHidden && <span className="bg-slate-800 text-white text-[10px] px-2.5 py-0.5 rounded-full tracking-wide">Hidden</span>}
+                                      {tc.isHidden && <span className="bg-slate-800 text-white text-[10px] px-2 py-0.5 rounded-full">Hidden</span>}
                                     </span>
-                                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${
                                       tc.status === 'Passed' ? 'text-emerald-700 bg-emerald-100' : 'text-red-700 bg-red-100'
                                     }`}>
                                       {tc.status}
@@ -172,10 +176,10 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
                         )}
                       </>
                     ) : (
-                      <div className="p-10 text-center border border-slate-200 rounded-xl bg-slate-50">
-                        <Code2 size={32} className="text-slate-300 mx-auto mb-3" />
-                        <p className="text-slate-600 font-bold">Unattempted Problem</p>
-                        <p className="text-slate-500 text-sm mt-1">The student did not submit code for this specific challenge.</p>
+                      <div className="p-8 text-center border border-slate-200 rounded-xl bg-slate-50">
+                        <Code2 size={28} className="text-slate-300 mx-auto mb-2" />
+                        <p className="text-slate-600 font-bold text-sm">Unattempted Problem</p>
+                        <p className="text-slate-400 text-xs mt-1">Student did not submit code for this challenge.</p>
                       </div>
                     )}
                   </div>
@@ -183,19 +187,19 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
               </div>
             ) : (
               <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl">
-                <Code2 size={32} className="text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-500 font-medium">No coding submissions found for this student.</p>
+                <Code2 size={28} className="text-slate-300 mx-auto mb-2" />
+                <p className="text-slate-400 text-sm font-medium">No coding submissions found.</p>
               </div>
             )}
           </div>
 
+          {/* Subjective Answers */}
           {subjectiveQuestions.length > 0 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
-                <BookOpen size={18} className="text-cyan-600"/>
-                <h3 className="font-bold text-slate-900">Subjective Answers</h3>
+                <BookOpen size={16} className="text-blue-600"/>
+                <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wider">Subjective Answers</h3>
               </div>
-
               {subjectiveQuestions.map((sq) => {
                 const answer = student.subjectiveAnswers?.[sq.id];
                 return (
@@ -233,7 +237,7 @@ const LeaderboardTable = ({ students, scoreKey, scoreLabel, showSections = false
       <div className="p-4 border-b border-slate-100 bg-white">
         <div className="relative w-full max-w-md">
           <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />
-          <input type="text" placeholder="Search student ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500" />
+          <input type="text" placeholder="Search student ID or department..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20" />
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -247,11 +251,19 @@ const LeaderboardTable = ({ students, scoreKey, scoreLabel, showSections = false
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredList.map((s, idx) => (
-              <tr key={s.id} onClick={() => onStudentClick(s)} className="hover:bg-cyan-50/50 cursor-pointer transition-colors group">
+            {filteredList.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="px-4 py-16 text-center">
+                  <Search size={28} className="text-slate-200 mx-auto mb-3" />
+                  <p className="text-slate-400 font-bold text-sm">No students match your search.</p>
+                  <p className="text-slate-300 text-xs mt-1">Try a different ID or department name.</p>
+                </td>
+              </tr>
+            ) : filteredList.map((s, idx) => (
+              <tr key={s.id} onClick={() => onStudentClick(s)} className="hover:bg-blue-50/40 cursor-pointer transition-colors group">
                 <td className="px-4 py-3"><span className="font-black text-slate-500">{idx < 3 ? medals[idx] : `#${idx + 1}`}</span></td>
                 <td className="px-4 py-3">
-                  <p className="font-bold text-slate-900 group-hover:text-cyan-700">{s.student_id}</p>
+                  <p className="font-bold text-slate-900 group-hover:text-blue-700">{s.student_id}</p>
                 </td>
                 <td className="px-4 py-3 text-xs font-bold text-slate-600">{s.dept}</td>
                 <td className="px-4 py-3 text-center">
@@ -259,9 +271,9 @@ const LeaderboardTable = ({ students, scoreKey, scoreLabel, showSections = false
                     {s.status}
                   </span>
                 </td>
-                {showSections && <><td className="px-4 py-3 text-center font-bold text-indigo-700 text-xs">{s.aptScore}</td><td className="px-4 py-3 text-center font-bold text-emerald-700 text-xs">{s.techScore}</td><td className="px-4 py-3 text-center font-bold text-cyan-700 text-xs">{s.codScore}</td></>}
+                {showSections && <><td className="px-4 py-3 text-center font-bold text-indigo-700 text-xs">{s.aptScore}</td><td className="px-4 py-3 text-center font-bold text-emerald-700 text-xs">{s.techScore}</td><td className="px-4 py-3 text-center font-bold text-blue-700 text-xs">{s.codScore}</td></>}
                 <td className="px-4 py-3 text-center"><span className="font-black text-slate-900">{s[scoreKey]}</span></td>
-                <td className="px-4 py-3 text-center"><span className="font-black text-sm text-cyan-600">{s.currentViewPercentile ?? s.percentile}th</span></td>
+                <td className="px-4 py-3 text-center"><span className="font-black text-sm text-blue-600">{s.currentViewPercentile ?? s.percentile}th</span></td>
               </tr>
             ))}
           </tbody>
@@ -342,9 +354,13 @@ export default function AnalyticsView({ test, onBack }) {
 
   const topScore = allStudents[0]?.total ?? 0;
   const avgTotal = allStudents.length ? Math.round(allStudents.reduce((a, s) => a + s.total, 0) / allStudents.length) : 0;
+  const finishedCount = allStudents.filter(s => s.status === 'Finished').length;
+  const completionRate = allStudents.length ? Math.round((finishedCount / allStudents.length) * 100) : 0;
+  const passCount = allStudents.filter(s => s.percentile >= 50).length;
+  const failCount = allStudents.length - passCount;
 
   const SECTIONS = [
-    { id: 'overview',  label: 'Overview', icon: BarChart2, color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+    { id: 'overview',  label: 'Overview', icon: BarChart2, color: 'bg-blue-50 text-blue-800 border-blue-200' },
     { id: 'aptitude', label: 'Aptitude', icon: BrainCircuit, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
     { id: 'technical', label: 'Technical', icon: Database, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
     { id: 'coding', label: 'Coding', icon: Code2, color: 'bg-blue-50 text-blue-700 border-blue-200' },
@@ -352,7 +368,7 @@ export default function AnalyticsView({ test, onBack }) {
   ];
 
   return (
-    <div className="space-y-5 pb-16 animate-in fade-in duration-300">
+    <div className="space-y-5 pb-16">
       
       <StudentDetailModal student={selectedStudentDetail} subjectiveQuestions={subjectiveQuestions} onClose={() => setSelectedStudentDetail(null)} />
 
@@ -375,10 +391,10 @@ export default function AnalyticsView({ test, onBack }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
-          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Appeared</span><span className="p-2 rounded-lg bg-cyan-50 text-cyan-600"><Users size={15} /></span></div>
-          <p className="text-3xl font-black text-cyan-600">{allStudents.length}</p>
+          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Appeared</span><span className="p-2 rounded-lg bg-blue-50 text-blue-600"><Users size={15} /></span></div>
+          <p className="text-3xl font-black text-blue-600">{allStudents.length}</p>
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
           <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Top Score</span><span className="p-2 rounded-lg bg-amber-50 text-amber-600"><Award size={15} /></span></div>
@@ -387,6 +403,16 @@ export default function AnalyticsView({ test, onBack }) {
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
           <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Avg Score</span><span className="p-2 rounded-lg bg-indigo-50 text-indigo-600"><BrainCircuit size={15} /></span></div>
           <p className="text-3xl font-black text-indigo-600">{avgTotal}</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
+          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Completion</span><span className="p-2 rounded-lg bg-emerald-50 text-emerald-600"><CheckCircle size={15} /></span></div>
+          <p className="text-3xl font-black text-emerald-600">{completionRate}<span className="text-base font-bold text-slate-400">%</span></p>
+          <p className="text-xs text-slate-400">{finishedCount} of {allStudents.length} submitted</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-3">
+          <div className="flex items-center justify-between"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Pass / Fail</span><span className="p-2 rounded-lg bg-slate-50 text-slate-600"><Target size={15} /></span></div>
+          <p className="text-3xl font-black text-slate-900">{passCount}<span className="text-base font-bold text-slate-300"> / {failCount}</span></p>
+          <p className="text-xs text-slate-400">≥50th percentile = pass</p>
         </div>
       </div>
 
@@ -404,7 +430,7 @@ export default function AnalyticsView({ test, onBack }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
             {[
               { label: 'Top 10% (90–100)', min: 90, color: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
-              { label: 'Good (75–89)', min: 75, max: 89, color: 'bg-cyan-50 border-cyan-200 text-cyan-800' },
+              { label: 'Good (75–89)', min: 75, max: 89, color: 'bg-blue-50 border-blue-200 text-blue-800' },
               { label: 'Average (50–74)', min: 50, max: 74, color: 'bg-amber-50 border-amber-200 text-amber-800' },
               { label: 'Below avg (<50)', max: 49, color: 'bg-red-50 border-red-200 text-red-700' },
             ].map(band => {

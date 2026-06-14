@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../services/api';
-import { CheckCircle, XCircle, Monitor, Camera, Mic, Wifi, AlertTriangle } from 'lucide-react';
+import { CheckCircle, XCircle, Monitor, Camera, Mic, Wifi, AlertTriangle, Activity, ShieldCheck } from 'lucide-react';
 
 // Maps browser DOMException names to human-readable causes
 const HARDWARE_ERROR_MAP = {
@@ -204,6 +204,10 @@ export default function PreExamCheck() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center justify-center font-sans">
       <div className="w-full max-w-5xl mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center"><Activity size={17} className="text-white" /></div>
+          <span className="font-bold text-lg tracking-tight text-slate-900">LIAS</span>
+        </div>
         <h1 className="text-3xl font-black text-slate-900 tracking-tight">System Pre-Check</h1>
         <p className="text-slate-500 mt-2 font-medium">Verify your environment before beginning.</p>
       </div>
@@ -211,8 +215,8 @@ export default function PreExamCheck() {
       <div className="w-full max-w-5xl flex flex-col md:flex-row gap-6">
         <div className="flex-1 bg-white rounded-2xl shadow-lg border border-slate-200 p-6 space-y-4">
           <NetworkSpeedItem passed={checks.network} status={networkStatus} speed={networkSpeed} onRetry={() => measureNetworkSpeed(true)} />
-          <CheckItem icon={<Camera />} title="Camera Access"        passed={checks.camera}  />
-          <CheckItem icon={<Mic />}    title="Microphone Access"    passed={checks.mic}     />
+          <CheckItem icon={<Camera />} title="Camera Access"        passed={checks.camera}  pending={!checks.camera && !hardwareError && !retrying} />
+          <CheckItem icon={<Mic />}    title="Microphone Access"    passed={checks.mic}     pending={!checks.mic && !hardwareError && !retrying} />
 
           <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
             <div className="flex items-center gap-4">
@@ -241,13 +245,13 @@ export default function PreExamCheck() {
   </div>
 )}
           {hardwareError && (
-            <div className="flex items-start gap-3 p-4 bg-rose-50 border border-rose-200 rounded-xl">
-              <AlertTriangle size={18} className="text-rose-500 mt-0.5 shrink-0" />
+            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+              <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
               <div className="flex-1">
-                <p className="text-sm font-bold text-rose-700">{hardwareError}</p>
+                <p className="text-sm font-bold text-red-700">{hardwareError}</p>
               </div>
               <button onClick={handleManualRetry}
-                className="text-xs font-bold text-rose-600 border border-rose-300 px-3 py-1.5 rounded-lg hover:bg-rose-100 whitespace-nowrap">
+                className="text-xs font-bold text-red-600 border border-red-300 px-3 py-1.5 rounded-lg hover:bg-red-100 whitespace-nowrap">
                 Retry
               </button>
             </div>
@@ -261,7 +265,7 @@ export default function PreExamCheck() {
 
           <div className="pt-4">
             <button disabled={!allPassed} onClick={() => setShowRules(true)}
-              className={`w-full py-3.5 rounded-xl font-bold text-lg transition-all ${allPassed ? 'bg-cyan-600 hover:bg-cyan-700 text-white shadow-md' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+              className={`w-full py-3.5 rounded-xl font-bold text-lg transition-all ${allPassed ? 'bg-blue-900 hover:bg-blue-800 text-white shadow-md' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
               Proceed to Dashboard
             </button>
           </div>
@@ -275,15 +279,25 @@ export default function PreExamCheck() {
       {showRules && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white max-w-lg w-full rounded-2xl p-8 shadow-2xl">
-            <h2 className="text-xl font-black text-slate-900 mb-6">Examination Rules</h2>
-            <div className="flex items-start gap-3 mb-8">
-              <input type="checkbox" id="agree" className="mt-1 w-4 h-4 rounded text-cyan-600" onChange={e => setRulesAccepted(e.target.checked)} />
+            <div className="w-12 h-12 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-4">
+              <ShieldCheck size={22} className="text-blue-900" />
+            </div>
+            <h2 className="text-xl font-black text-slate-900 mb-1">Examination Rules</h2>
+            <p className="text-sm text-slate-500 mb-5">Please review before entering the exam.</p>
+            <ul className="space-y-2.5 mb-6">
+              <li className="flex items-start gap-2.5 text-sm text-slate-600"><CheckCircle size={16} className="text-emerald-500 mt-0.5 shrink-0" /> Stay in fullscreen mode for the entire duration.</li>
+              <li className="flex items-start gap-2.5 text-sm text-slate-600"><CheckCircle size={16} className="text-emerald-500 mt-0.5 shrink-0" /> Remain visible in the camera frame at all times.</li>
+              <li className="flex items-start gap-2.5 text-sm text-slate-600"><CheckCircle size={16} className="text-emerald-500 mt-0.5 shrink-0" /> Do not switch tabs, open other apps, or use external devices.</li>
+              <li className="flex items-start gap-2.5 text-sm text-slate-600"><CheckCircle size={16} className="text-emerald-500 mt-0.5 shrink-0" /> Submit before the timer ends — no extensions are granted.</li>
+            </ul>
+            <div className="flex items-start gap-3 mb-8 pt-4 border-t border-slate-100">
+              <input type="checkbox" id="agree" className="mt-1 w-4 h-4 rounded text-blue-900" onChange={e => setRulesAccepted(e.target.checked)} />
               <label htmlFor="agree" className="text-sm font-bold text-slate-900 cursor-pointer">I agree to the proctoring terms.</label>
             </div>
             <div className="flex justify-end gap-3">
               <button onClick={() => setShowRules(false)} className="px-5 py-2.5 text-slate-500 font-bold">Cancel</button>
               <button disabled={!rulesAccepted} onClick={proceedToDashboard}
-                className={`px-6 py-2.5 rounded-lg font-bold text-white ${rulesAccepted ? 'bg-cyan-600 hover:bg-cyan-700' : 'bg-slate-300'}`}>
+                className={`px-6 py-2.5 rounded-lg font-bold text-white transition-colors ${rulesAccepted ? 'bg-blue-900 hover:bg-blue-800' : 'bg-slate-300'}`}>
                 Enter Dashboard
               </button>
             </div>
@@ -298,7 +312,7 @@ const STATUS_CONFIG = {
   measuring: { bar: 'bg-slate-300', label: 'Measuring…',  text: 'text-slate-400', bg: 'bg-slate-50',  border: 'border-slate-200' },
   good:      { bar: 'bg-emerald-500', label: 'Good',      text: 'text-emerald-600', bg: 'bg-slate-50', border: 'border-slate-200' },
   warn:      { bar: 'bg-amber-400',   label: 'Moderate',  text: 'text-amber-600',  bg: 'bg-amber-50',  border: 'border-amber-200' },
-  fail:      { bar: 'bg-rose-500',    label: 'Poor',      text: 'text-rose-600',   bg: 'bg-rose-50',   border: 'border-rose-200'  },
+  fail:      { bar: 'bg-red-500',    label: 'Poor',      text: 'text-red-600',   bg: 'bg-red-50',   border: 'border-red-200'  },
 };
 
 const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
@@ -310,7 +324,7 @@ const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
     <div className={`p-4 rounded-xl border ${cfg.bg} ${cfg.border}`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-4">
-          <Wifi className={passed ? 'text-emerald-500' : status === 'measuring' ? 'text-slate-400 animate-pulse' : 'text-rose-500'} />
+          <Wifi className={passed ? 'text-emerald-500' : status === 'measuring' ? 'text-slate-400 animate-pulse' : 'text-red-500'} />
           <div>
             <p className="font-bold text-slate-900 leading-tight">Network Connectivity</p>
             <p className={`text-xs font-semibold mt-0.5 ${cfg.text}`}>
@@ -320,7 +334,7 @@ const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
         </div>
         <div className="flex items-center gap-2">
           {status === 'fail' && (
-            <button onClick={onRetry} className="text-xs font-bold text-rose-600 border border-rose-300 px-3 py-1.5 rounded-lg hover:bg-rose-100 whitespace-nowrap">
+            <button onClick={onRetry} className="text-xs font-bold text-red-600 border border-red-300 px-3 py-1.5 rounded-lg hover:bg-red-100 whitespace-nowrap">
               Retry
             </button>
           )}
@@ -328,7 +342,7 @@ const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
             ? <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-slate-600 animate-spin" />
             : passed
               ? <CheckCircle className="text-emerald-500 shrink-0" />
-              : <XCircle className="text-rose-500 shrink-0" />
+              : <XCircle className="text-red-500 shrink-0" />
           }
         </div>
       </div>
@@ -343,12 +357,16 @@ const NetworkSpeedItem = ({ passed, status, speed, onRetry }) => {
   );
 };
 
-const CheckItem = ({ icon, title, passed }) => (
+const CheckItem = ({ icon, title, passed, pending }) => (
   <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
     <div className="flex items-center gap-4">
       <div className={passed ? 'text-emerald-500' : 'text-slate-400'}>{icon}</div>
       <p className="font-bold text-slate-900">{title}</p>
     </div>
-    {passed ? <CheckCircle className="text-emerald-500" /> : <XCircle className="text-rose-500 animate-pulse" />}
+    {passed
+      ? <CheckCircle className="text-emerald-500" />
+      : pending
+        ? <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-slate-600 animate-spin" />
+        : <XCircle className="text-red-500" />}
   </div>
 );

@@ -105,20 +105,23 @@ const SmartTimer = ({
     return () => clearInterval(timer);
   }, [examData, isSynced, ts, onTimeUp, isCodingActive, mcqStartTime]);
 
-  if (timeLeft === null) return <span>Calculating...</span>;
+  if (timeLeft === null) return <span className="text-slate-400 font-bold tracking-widest">Syncing...</span>;
 
   const m = Math.floor(timeLeft / 60);
   const s = timeLeft % 60;
+  const urgency = timeLeft <= 60 ? "critical" : timeLeft <= 300 ? "warning" : "normal";
   return (
     <span
       className={
-        timeLeft <= 300
-          ? "text-red-600 animate-pulse font-black tracking-widest"
-          : "text-cyan-600 font-bold tracking-widest"
+        urgency === "critical"
+          ? "text-red-600 font-black tracking-widest"
+          : urgency === "warning"
+          ? "text-amber-600 font-black tracking-widest"
+          : "text-blue-900 font-bold tracking-widest"
       }
+      style={urgency === "critical" ? { animation: "pulse 1s ease-in-out infinite" } : undefined}
     >
-      {m}:{s < 10 ? "0" : ""}
-      {s} Remaining
+      {m}:{s < 10 ? "0" : ""}{s}{urgency === "critical" ? " ⚠" : " Remaining"}
     </span>
   );
 };
@@ -663,7 +666,7 @@ export default function ExamWorkspace() {
           {Object.entries(groupedQuestions).map(([sectionName, sectionQs]) => (
             <div key={sectionName} className="mb-8 last:mb-0">
               <div className="flex items-center gap-2 mb-3">
-                <span className="text-[10px] font-bold text-cyan-700 bg-cyan-50 py-1 px-2.5 rounded uppercase tracking-widest border border-cyan-100">
+                <span className="text-[10px] font-bold text-blue-900 bg-blue-50 py-1 px-2.5 rounded uppercase tracking-widest border border-blue-200">
                   {sectionName}
                 </span>
                 <span className="text-[10px] font-bold text-slate-400">
@@ -683,10 +686,10 @@ export default function ExamWorkspace() {
                       key={idx}
                       onClick={() => setIndex(idx)}
                       className={`w-10 h-10 rounded-lg text-sm font-bold flex items-center justify-center transition-all border relative
-                        ${isActive ? "border-cyan-600 ring-2 ring-cyan-600/20 shadow-sm" : "border-slate-200"}
+                        ${isActive ? "border-blue-900 ring-2 ring-blue-900/20 shadow-sm" : "border-slate-200"}
                         ${isAnswered && !isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200" : ""}
                         ${!isAnswered && !isActive ? "bg-white text-slate-600 hover:bg-slate-50 hover:border-slate-300" : ""}
-                        ${isAnswered && isActive ? "bg-cyan-600 text-white border-cyan-600" : ""}
+                        ${isAnswered && isActive ? "bg-blue-900 text-white border-blue-900" : ""}
                       `}
                     >
                       {idx + 1}
@@ -704,7 +707,7 @@ export default function ExamWorkspace() {
         <div className="flex-1 flex flex-col p-6 lg:p-10 overflow-y-auto">
           <div className="max-w-3xl w-full mx-auto">
             <div className="flex items-center justify-between mb-6">
-              <span className="text-sm font-bold text-cyan-700 bg-cyan-50 px-3 py-1 rounded-full">
+              <span className="text-sm font-bold text-blue-900 bg-blue-50 border border-blue-200 px-3 py-1 rounded-full">
                 Question {currentIndex + 1} of {flatQuestions.length}
               </span>
             </div>
@@ -728,15 +731,15 @@ export default function ExamWorkspace() {
                       className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4
                         ${
                           isSelected
-                            ? "border-cyan-600 bg-cyan-50 text-cyan-700 shadow-sm"
-                            : "border-slate-200 bg-white text-slate-700 hover:border-cyan-200"
+                            ? "border-blue-900 bg-blue-50 text-blue-900 shadow-sm"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
                         }`}
                     >
                       <div
-                        className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-cyan-600" : "border-slate-300"}`}
+                        className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-blue-900" : "border-slate-300"}`}
                       >
                         {isSelected && (
-                          <div className="w-2.5 h-2.5 bg-cyan-600 rounded-full"></div>
+                          <div className="w-2.5 h-2.5 bg-blue-900 rounded-full"></div>
                         )}
                       </div>
                       <span className="font-medium text-base">
@@ -793,7 +796,7 @@ export default function ExamWorkspace() {
                   setIndex(Math.min(flatQuestions.length - 1, currentIndex + 1))
                 }
                 disabled={currentIndex === flatQuestions.length - 1}
-                className="px-5 py-2.5 rounded-lg font-bold text-white bg-cyan-600 shadow-md flex items-center gap-2"
+                className="px-5 py-2.5 rounded-lg font-bold text-white bg-blue-900 hover:bg-blue-800 shadow-md flex items-center gap-2 transition-colors"
               >
                 Next <ChevronRight size={18} />
               </button>
@@ -912,7 +915,7 @@ const renderSubjectiveSection = () => {
           </div>
 
           <div
-            className="h-1.5 bg-[#333] cursor-row-resize hover:bg-cyan-500 transition-colors z-10 flex justify-center items-center group flex-shrink-0"
+            className="h-1.5 bg-[#333] cursor-row-resize hover:bg-blue-900 transition-colors z-10 flex justify-center items-center group flex-shrink-0"
             onMouseDown={startResize}
           >
             <div className="w-10 h-0.5 bg-[#555] rounded-full group-hover:bg-white transition-colors pointer-events-none" />
@@ -996,7 +999,7 @@ const renderSubjectiveSection = () => {
 
                     <div className="w-3/4 p-5 overflow-y-auto bg-[#1e1e1e]">
                       {consoleOutput.testCases[selectedTestCase] && (
-                        <div className="animate-in fade-in duration-200">
+                        <div style={{animation:"toastSlideIn 0.2s ease"}}>
                           <div className="flex items-center gap-4 mb-6 pb-4 border-b border-[#333]">
                             <div>
                               <div className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">
@@ -1082,64 +1085,73 @@ const renderSubjectiveSection = () => {
       {/* 🚨 VIOLATION WARNING MODAL — shown on every proctoring event */}
       {showViolationModal && (
         <div className="fixed inset-0 z-[300] bg-black/80 flex items-center justify-center p-6">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 text-center border-4 border-red-500">
-            <div className="text-6xl mb-4">🚨</div>
-            <h2 className="text-2xl font-black text-red-600 mb-2">
-              {violationCount >= MAX_VIOLATIONS
-                ? "Exam Terminated"
-                : "Proctoring Violation"}
-            </h2>
-            <p className="text-slate-600 mb-4 font-medium">
-              {violationCount >= MAX_VIOLATIONS
-                ? "You have exceeded the maximum allowed violations."
-                : "A prohibited action was detected and recorded by the system."}
-            </p>
-            <div
-              className={`text-5xl font-black mb-2 ${violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-orange-500"}`}
-            >
-              {violationCount} / {MAX_VIOLATIONS}
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full text-center overflow-hidden border border-slate-200">
+            <div className={`px-8 pt-8 pb-6 ${violationCount >= MAX_VIOLATIONS ? "border-b-4 border-red-600" : "border-b-4 border-orange-500"}`}>
+              <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${violationCount >= MAX_VIOLATIONS ? "bg-red-50 border-2 border-red-200" : "bg-orange-50 border-2 border-orange-200"}`}>
+                <AlertTriangle size={32} className={violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-orange-500"} />
+              </div>
+              <h2 className={`text-2xl font-black mb-2 ${violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-slate-900"}`}>
+                {violationCount >= MAX_VIOLATIONS ? "Exam Terminated" : "Proctoring Violation"}
+              </h2>
+              <p className="text-slate-600 font-medium text-sm">
+                {violationCount >= MAX_VIOLATIONS
+                  ? "You have exceeded the maximum allowed violations."
+                  : "A prohibited action was detected and recorded by the system."}
+              </p>
             </div>
-            <p className="text-sm text-slate-500 mb-6">
-              {violationCount >= MAX_VIOLATIONS
-                ? "❌ Your session has been flagged and terminated."
-                : `⚠️ You have ${MAX_VIOLATIONS - violationCount} chance(s) remaining before your session is flagged.`}
-            </p>
-            <button
-              onClick={() => {
-                if (violationCount >= MAX_VIOLATIONS) {
-                  api
-                    .post(`/exam/${examId}/submit`, {
-                      answers,
-                      autoSubmit: true,
-                      subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
-                    })
-                    .then(() => {
-                      [
-                        "answers",
-                        "codes",
-                        "active_lang",
-                        "active_source",
-                        "subjective",
-                      ].forEach((key) =>
-                        localStorage.removeItem(`scope_${key}_${examId}`),
-                      );
-                      navigate("/dashboard");
-                    })
-                    .catch(() => navigate("/dashboard"));
-                  return;
-                }
+            <div className="px-8 py-5">
+              <div className="mb-3">
+                <div className="flex justify-between text-xs font-bold text-slate-500 mb-1.5">
+                  <span>Violations</span>
+                  <span className={violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-orange-600"}>{violationCount} / {MAX_VIOLATIONS}</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full transition-all ${violationCount >= MAX_VIOLATIONS ? "bg-red-600" : "bg-orange-500"}`}
+                    style={{ width: `${Math.min(100, (violationCount / MAX_VIOLATIONS) * 100)}%` }}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mb-5">
+                {violationCount >= MAX_VIOLATIONS
+                  ? "Your session has been flagged and terminated."
+                  : `${MAX_VIOLATIONS - violationCount} chance(s) remaining before your session is flagged.`}
+              </p>
+              <button
+                onClick={() => {
+                  if (violationCount >= MAX_VIOLATIONS) {
+                    api
+                      .post(`/exam/${examId}/submit`, {
+                        answers,
+                        autoSubmit: true,
+                        subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
+                      })
+                      .then(() => {
+                        [
+                          "answers",
+                          "codes",
+                          "active_lang",
+                          "active_source",
+                          "subjective",
+                        ].forEach((key) =>
+                          localStorage.removeItem(`scope_${key}_${examId}`),
+                        );
+                        navigate("/dashboard");
+                      })
+                      .catch(() => navigate("/dashboard"));
+                    return;
+                  }
 
-                setShowViolationModal(false);
-                if (!document.fullscreenElement) {
-                  document.documentElement.requestFullscreen().catch(() => {});
-                }
-              }}
-              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl"
-            >
-              {violationCount >= MAX_VIOLATIONS
-                ? "Exit to Dashboard"
-                : "I Understand — Return to Exam"}
-            </button>
+                  setShowViolationModal(false);
+                  if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(() => {});
+                  }
+                }}
+                className={`w-full font-bold py-3 rounded-xl transition-colors ${violationCount >= MAX_VIOLATIONS ? "bg-red-600 hover:bg-red-700 text-white" : "bg-slate-900 hover:bg-slate-800 text-white"}`}
+              >
+                {violationCount >= MAX_VIOLATIONS ? "Exit to Dashboard" : "I Understand — Return to Exam"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1159,7 +1171,7 @@ const renderSubjectiveSection = () => {
                 .requestFullscreen()
                 .catch(() => alert("Fullscreen blocked by browser."))
             }
-            className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all"
+            className="bg-blue-900 hover:bg-blue-800 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all"
           >
             Click here to resume exam
           </button>
@@ -1167,7 +1179,11 @@ const renderSubjectiveSection = () => {
       )}
 
       {toastMessage && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl z-[100] font-bold text-sm animate-in slide-in-from-top-4 fade-in flex items-center gap-2">
+        <div
+          className="fixed top-20 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl z-[100] font-bold text-sm flex items-center gap-2"
+          style={{ animation: "toastSlideIn 0.25s cubic-bezier(0.22,1,0.36,1)" }}
+        >
+          <style>{`@keyframes toastSlideIn{from{opacity:0;transform:translate(-50%,-12px)}to{opacity:1;transform:translate(-50%,0)}}`}</style>
           <AlertTriangle size={16} className="text-amber-400" />
           {toastMessage}
         </div>
@@ -1211,7 +1227,7 @@ const renderSubjectiveSection = () => {
             onClick={() => !isCodingLocked && setActiveSection("coding")}
             className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
               activeSection === "coding"
-                ? "border-cyan-600 text-cyan-600"
+                ? "border-blue-900 text-blue-900"
                 : isCodingLocked
                   ? "border-transparent text-slate-300 cursor-not-allowed"
                   : "border-transparent text-slate-500"
@@ -1228,7 +1244,7 @@ const renderSubjectiveSection = () => {
             disabled={!isCodingLocked}
             className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
               activeSection === "technical"
-                ? "border-cyan-600 text-cyan-600"
+                ? "border-blue-900 text-blue-900"
                 : !isCodingLocked
                   ? "border-transparent text-slate-300 cursor-not-allowed opacity-50"
                   : "border-transparent text-slate-500"
@@ -1242,7 +1258,7 @@ const renderSubjectiveSection = () => {
   onClick={() => setActiveSection('subjective')}
   disabled={examData?.subjectiveQuestions?.length === 0}
   className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
-    activeSection === 'subjective' ? 'border-cyan-600 text-cyan-600' :
+    activeSection === 'subjective' ? 'border-blue-900 text-blue-900' :
     !examData?.subjectiveQuestions?.length ? 'border-transparent text-slate-300 cursor-not-allowed opacity-50' :
     'border-transparent text-slate-500'
   }`}
@@ -1290,7 +1306,7 @@ const renderSubjectiveSection = () => {
               </button>
               <button
                 onClick={executeCodingLock}
-                className="px-5 py-2.5 bg-cyan-600 text-white font-bold rounded-lg shadow-md"
+                className="px-5 py-2.5 bg-blue-900 hover:bg-blue-800 text-white font-bold rounded-lg shadow-md transition-colors"
               >
                 Yes, Lock & Proceed
               </button>
