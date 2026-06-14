@@ -206,7 +206,7 @@ export default function PreExamCheck() {
       <div className="w-full max-w-5xl mb-6">
         <div className="flex items-center gap-2 mb-3">
             <div className="bg-white rounded-xl px-4 py-2 shadow-sm inline-flex">
-            <img src="/Main-Logo.png" alt="LIAS" className="h-30 w-auto object-contain" />
+            <img src="/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
           </div>
           </div>
         <h1 className="text-3xl font-black text-slate-900 tracking-tight">System Pre-Check</h1>
