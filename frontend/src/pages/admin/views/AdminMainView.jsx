@@ -97,12 +97,12 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300 relative">
+    <div className="space-y-8 relative">
       
       {/* 🚀 Feature 1: Custom Confirmation Modal */}
       {examToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in duration-200">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl transition-all">
             <div className="flex items-center gap-3 mb-3 text-red-600">
               <AlertTriangle size={24} />
               <h3 className="text-xl font-black">Delete Examination?</h3>
@@ -147,7 +147,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
 <div className="flex justify-between items-start mb-4 pt-4 relative z-10">
                   <h3 className="font-black text-lg text-slate-900 pr-12 truncate">{test.title}</h3>
                   <div className="flex gap-2">
-                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-blue-700 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                     <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
                   </div>
                 </div>
@@ -179,7 +179,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
 
       {/* ── UPCOMING EXAMS ── */}
       <section>
-        <div className="flex items-center gap-2 mb-4"><CalendarDays size={20} className="text-cyan-600" /><h2 className="text-lg font-black text-slate-900 tracking-tight">Upcoming Examinations</h2></div>
+        <div className="flex items-center gap-2 mb-4"><CalendarDays size={20} className="text-blue-700" /><h2 className="text-lg font-black text-slate-900 tracking-tight">Upcoming Examinations</h2></div>
         {upcomingTests.length === 0 ? (
           <div className="bg-slate-50 border border-slate-200 border-dashed rounded-2xl p-8 text-center"><CalendarDays size={32} className="mx-auto text-slate-300 mb-3" /><p className="text-slate-500 font-bold">No upcoming exams scheduled.</p></div>
         ) : (
@@ -189,7 +189,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
                 <div className="flex justify-between items-start mb-4">
                   <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
                   <div className="flex gap-2">
-                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-cyan-600 transition-colors" title="Copy Student Link"><Link size={18}/></button>
+                    <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-blue-700 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                     <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
                   </div>
                 </div>
@@ -210,10 +210,10 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
 
                 <div className="space-y-2 mb-6 flex-grow">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><CalendarDays size={14}/> Scheduled</span><span className="font-bold text-slate-700">{new Date(test.starts_at_ms).toLocaleDateString()}</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Clock size={14}/> Starts in</span><span className="font-bold text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded"><LiveCountdown rawDate={test.starts_at_ms} isUpcoming={true} ts={ts} /></span></div>
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500 font-bold flex items-center gap-1.5"><Clock size={14}/> Starts in</span><span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded"><LiveCountdown rawDate={test.starts_at_ms} isUpcoming={true} ts={ts} /></span></div>
                 </div>
                 <div className="flex gap-2 mt-auto">
-                  <button onClick={() => onViewUpcoming(test)} className="flex-1 py-2.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 rounded-xl text-sm font-bold transition-colors">Preview Setup</button>
+                  <button onClick={() => onViewUpcoming(test)} className="flex-1 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-sm font-bold transition-colors">Preview Setup</button>
                 </div>
               </div>
             ))}
@@ -230,7 +230,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
               <div key={test.id} className="bg-amber-50/30 border border-amber-200 rounded-2xl p-4 flex justify-between items-center group">
                 <div className="overflow-hidden pr-4"><h3 className="font-bold text-slate-800 truncate">{test.title}</h3><p className="text-xs text-amber-600 font-semibold mt-0.5">Unpublished Setup</p></div>
                 <div className="flex gap-2">
-                  <button onClick={() => handleEditDraft(test.id)} className="p-2 text-slate-500 hover:text-cyan-700 hover:bg-white rounded-lg transition-all font-bold text-sm border border-transparent hover:border-cyan-200"><FileEdit size={16}/></button>
+                  <button onClick={() => handleEditDraft(test.id)} className="p-2 text-slate-500 hover:text-blue-700 hover:bg-white rounded-lg transition-all font-bold text-sm border border-transparent hover:border-blue-200"><FileEdit size={16}/></button>
                   <button onClick={() => setExamToDelete(test)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-lg transition-all border border-transparent hover:border-red-200"><Trash2 size={16}/></button>
                 </div>
               </div>

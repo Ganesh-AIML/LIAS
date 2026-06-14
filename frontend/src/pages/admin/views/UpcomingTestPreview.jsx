@@ -54,7 +54,7 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
   if (loading) return <div className="p-20 text-center font-bold animate-pulse text-slate-400">Loading Exam Manifest...</div>;
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-6 ">
       
       {/* HEADER */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex justify-between items-center">
@@ -94,13 +94,13 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
           <div className="flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden min-h-[600px]">
             <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
               <div className="flex items-center gap-3">
-                <span className="bg-cyan-600 text-white font-black px-3 py-1 rounded-md text-sm">
+                <span className="bg-blue-900 text-white font-black px-3 py-1 rounded-md text-sm">
                   {activeQ.type === 'coding' ? <Code2 size={16} /> : `Q${currentQIndex + 1}`}
                 </span>
                 <span className="font-bold text-slate-700">{activeQ.section}</span>
               </div>
               <div className="flex items-center gap-2 text-slate-500 font-bold text-sm bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-                <Clock size={16} className="text-cyan-600" /> --:-- (Simulated)
+                <Clock size={16} className="text-blue-700" /> --:-- (Simulated)
               </div>
             </div>
 
@@ -115,12 +115,12 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
                         onClick={() => setSelectedAnswers(prev => ({ ...prev, [currentQIndex]: opt.id }))}
                         className={`text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4 ${
                           selectedAnswers[currentQIndex] === opt.id 
-                            ? 'border-cyan-500 bg-cyan-50 text-cyan-900 shadow-sm' 
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-cyan-300'
+                            ? 'border-blue-600 bg-blue-50 text-blue-900 shadow-sm' 
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300'
                         }`}
                       >
                         <span className={`w-8 h-8 flex items-center justify-center rounded-lg font-bold text-sm ${
-                          selectedAnswers[currentQIndex] === opt.id ? 'bg-cyan-500 text-white' : 'bg-slate-100 text-slate-500'
+                          selectedAnswers[currentQIndex] === opt.id ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-500'
                         }`}>{opt.id}</span>
                         <span className="font-semibold text-sm">{opt.text}</span>
                       </button>
@@ -136,7 +136,7 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
                   {activeQ.constraints && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-6">
                       <h4 className="font-bold text-slate-700 text-sm mb-2 flex items-center gap-2"><Database size={16}/> Constraints</h4>
-                      <code className="text-xs text-rose-600 font-bold">{activeQ.constraints}</code>
+                      <code className="text-xs text-red-600 font-bold">{activeQ.constraints}</code>
                     </div>
                   )}
                   <div className="bg-slate-900 rounded-xl p-6 flex items-center justify-center min-h-[300px]">
@@ -157,7 +157,7 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
               <button 
                 onClick={() => setCurrentQIndex(Math.min(activeQuestions.length - 1, currentQIndex + 1))}
                 disabled={currentQIndex === activeQuestions.length - 1}
-                className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-lg shadow-sm disabled:opacity-50 flex items-center gap-2 transition-colors"
+                className="px-6 py-2.5 bg-blue-900 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm disabled:opacity-50 flex items-center gap-2 transition-colors"
               >
                 Next <ChevronRight size={16}/>
               </button>
@@ -167,7 +167,7 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
           {/* RIGHT PANEL: Palette */}
           <div className="w-full md:w-80 bg-white border border-slate-200 rounded-2xl shadow-sm p-5 hidden md:flex flex-col h-[600px]">
             <h4 className="font-black text-slate-800 text-sm mb-4 border-b border-slate-100 pb-3 flex items-center gap-2">
-              <Database size={16} className="text-cyan-600" /> Question Palette
+              <Database size={16} className="text-blue-700" /> Question Palette
             </h4>
             <div className="flex flex-wrap gap-2 content-start flex-1 overflow-y-auto pr-2 pb-4">
               {activeQuestions.map((q, idx) => {
@@ -179,10 +179,10 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
                     onClick={() => setCurrentQIndex(idx)} 
                     className={`w-10 h-10 rounded-lg border-2 font-bold flex items-center justify-center text-sm transition-all ${
                       isActive 
-                        ? 'border-cyan-600 bg-cyan-50 text-cyan-700 scale-110 shadow-sm' 
+                        ? 'border-blue-700 bg-blue-50 text-blue-700 scale-110 shadow-sm' 
                         : isAnswered 
                           ? 'border-emerald-500 bg-emerald-500 text-white' 
-                          : 'border-slate-200 bg-white text-slate-500 hover:border-cyan-300'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300'
                     }`}
                   >
                     {q.type === 'coding' ? <Code2 size={16}/> : idx + 1}

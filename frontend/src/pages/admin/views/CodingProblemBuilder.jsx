@@ -68,14 +68,14 @@ export default function CodingProblemBuilder({ problems, setProblems }) {
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
-          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Code2 size={20} className="text-cyan-600" /> Coding Challenges</h2>
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Code2 size={20} className="text-blue-700" /> Coding Challenges</h2>
         </div>
         <div className="flex gap-2">
           <label className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-sm">
             <UploadCloud size={16} /> Bulk ZIP Import
             <input type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
           </label>
-          <button onClick={addProblem} className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm"><Plus size={16} /> Add Problem</button>
+          <button onClick={addProblem} className="flex items-center gap-1.5 bg-blue-900 hover:bg-blue-800 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm"><Plus size={16} /> Add Problem</button>
         </div>
       </div>
 
@@ -87,8 +87,8 @@ export default function CodingProblemBuilder({ problems, setProblems }) {
           </div>
           <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="space-y-4">
-              <div><label className="block text-xs font-bold text-slate-600 uppercase mb-1">Problem Title</label><input type="text" value={prob.title} onChange={e => updateProblem(prob.id, 'title', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-semibold focus:outline-none focus:border-cyan-500" /></div>
-              <div><label className="block text-xs font-bold text-slate-600 uppercase mb-1">Description (MD)</label><textarea rows="5" value={prob.description} onChange={e => updateProblem(prob.id, 'description', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-cyan-500 resize-none" /></div>
+              <div><label className="block text-xs font-bold text-slate-600 uppercase mb-1">Problem Title</label><input type="text" value={prob.title} onChange={e => updateProblem(prob.id, 'title', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-semibold focus:outline-none focus:border-blue-600" /></div>
+              <div><label className="block text-xs font-bold text-slate-600 uppercase mb-1">Description (MD)</label><textarea rows="5" value={prob.description} onChange={e => updateProblem(prob.id, 'description', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-blue-600 resize-none" /></div>
             </div>
             <div className="border border-slate-200 rounded-xl bg-slate-50 flex flex-col">
               <div className="flex justify-between items-center p-3 border-b bg-white rounded-t-xl">
@@ -104,8 +104,8 @@ export default function CodingProblemBuilder({ problems, setProblems }) {
                     </div>
                     <p className="text-[10px] font-bold text-slate-400 mb-2 uppercase">Case {tcIdx + 1} {tc.isHidden && '(Hidden)'}</p>
                     <div className="grid grid-cols-2 gap-3">
-                      <div><label className="block text-[9px] text-slate-500 uppercase mb-1">STDIN</label><textarea rows="2" value={tc.input} onChange={e => updateTestCase(prob.id, tc.id, 'input', e.target.value)} className="w-full bg-slate-900 text-cyan-400 border border-slate-700 rounded-md p-2 text-xs font-mono focus:outline-none focus:border-cyan-500 resize-none" /></div>
-                      <div><label className="block text-[9px] text-slate-500 uppercase mb-1">STDOUT</label><textarea rows="2" value={tc.output} onChange={e => updateTestCase(prob.id, tc.id, 'output', e.target.value)} className="w-full bg-slate-900 text-emerald-400 border border-slate-700 rounded-md p-2 text-xs font-mono focus:outline-none focus:border-cyan-500 resize-none" /></div>
+                      <div><label className="block text-[9px] text-slate-500 uppercase mb-1">STDIN</label><textarea rows="2" value={tc.input} onChange={e => updateTestCase(prob.id, tc.id, 'input', e.target.value)} className="w-full bg-slate-900 text-blue-300 border border-slate-700 rounded-md p-2 text-xs font-mono focus:outline-none focus:border-blue-600 resize-none" /></div>
+                      <div><label className="block text-[9px] text-slate-500 uppercase mb-1">STDOUT</label><textarea rows="2" value={tc.output} onChange={e => updateTestCase(prob.id, tc.id, 'output', e.target.value)} className="w-full bg-slate-900 text-emerald-400 border border-slate-700 rounded-md p-2 text-xs font-mono focus:outline-none focus:border-blue-600 resize-none" /></div>
                     </div>
                   </div>
                 ))}

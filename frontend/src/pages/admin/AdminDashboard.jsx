@@ -44,14 +44,14 @@ function AdminLoginGate({ onSuccess }) {
     <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-4 font-sans">
       <div className="bg-white w-full max-w-md p-8 rounded-2xl shadow-xl border border-slate-200">
         <div className="text-center mb-8">
-          <div className="w-12 h-12 bg-cyan-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+          <div className="w-12 h-12 bg-blue-900 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
             <Shield size={26} className="text-white" />
           </div>
           <h1 className="text-2xl font-black text-[#1E293B] tracking-tight">LIAS Admin</h1>
           <p className="text-sm font-bold text-[#64748B] uppercase tracking-widest mt-1">Unified Control Center</p>
         </div>
         
-        {error && <div className="bg-rose-50 text-rose-500 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>}
+        {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 font-bold">{error}</div>}
         
         <form onSubmit={handleLogin} className="space-y-5">
           <div>
@@ -63,11 +63,11 @@ function AdminLoginGate({ onSuccess }) {
                 required
                 value={token}
                 onChange={e => setToken(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:border-[#06B6D4] outline-none"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:border-blue-700 outline-none focus:ring-2 focus:ring-blue-100"
               />
             </div>
           </div>
-          <button type="submit" disabled={isLoading} className="w-full bg-[#06B6D4] hover:bg-cyan-700 disabled:opacity-60 text-white font-bold py-3 rounded-lg shadow-md mt-4 transition-colors">
+          <button type="submit" disabled={isLoading} className="w-full bg-blue-900 hover:bg-blue-800 disabled:opacity-60 text-white font-bold py-3 rounded-lg shadow-md mt-4 transition-colors">
             {isLoading ? 'Verifying...' : 'Enter Control Panel'}
           </button>
         </form>
@@ -103,11 +103,11 @@ export default function AdminDashboard() {
             
             <div className="flex items-center gap-6">
               <div className="flex items-center gap-2 cursor-pointer" onClick={goHome}>
-                <div className="w-8 h-8 bg-cyan-600 rounded-md flex items-center justify-center">
+                <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center">
                   <Shield size={18} className="text-white" />
                 </div>
                 <h1 className="text-xl font-black tracking-tight text-slate-800">
-                  LIAS <span className="text-cyan-600">Admin</span>
+                  LIAS <span className="text-blue-700">Admin</span>
                 </h1>
               </div>
 
@@ -134,7 +134,7 @@ export default function AdminDashboard() {
                     setCurrentView('schedule');
                     setEditingDraft(null);
                   }}
-                  className="hidden sm:flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm"
+                  className="hidden sm:flex items-center gap-1.5 bg-blue-900 hover:bg-blue-800 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
                 >
                   <PlusCircle size={16} /> Schedule Test
                 </button>
