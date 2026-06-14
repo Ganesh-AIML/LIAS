@@ -85,7 +85,7 @@ try {
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-indigo-600/10 rounded-full -translate-x-1/2 translate-y-1/2"></div>
 
         <div className="relative z-10 flex items-center">
-          <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
+          <img src="/Main-Logo.png" alt="LIAS" className="h-10 w-auto object-contain" />
         </div>
 
         <div className="relative z-10 max-w-sm">
@@ -115,7 +115,7 @@ try {
         <div className="w-full max-w-sm">
           <div className="text-center lg:text-left mb-8">
             <div className="lg:hidden inline-flex items-center gap-2 mb-4">
-              <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
+              <img src="/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h1>
             <p className="text-sm text-slate-500 mt-1">Sign in with your student credentials to continue.</p>

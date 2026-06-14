@@ -238,7 +238,7 @@ useEffect(() => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center gap-2.5">
-              <img src="/src/assets/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
+              <img src="/Main-Logo.png" alt="LIAS" className="h-8 w-auto object-contain" />
               <div className="flex items-center gap-2">
                 {liveExams.length > 0 && (
                   <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
