@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import MarkdownZipImporter, { parseMarkdownZip } from "../../../components/admin/MarkdownZipImporter";
 import {
   ArrowLeft,
   Save,
@@ -140,6 +141,41 @@ export default function ScheduleTest({ initialData, onBack }) {
     };
     reader.readAsText(file);
     e.target.value = "";
+  };
+
+  // Markdown/ZIP bulk import — merges parsed sections into existing question arrays
+  const handleMarkdownImport = ({ sections, errors }) => {
+    const newMcq  = [];
+    const newSubj = [];
+
+    for (const { meta, questions: qs } of sections) {
+      for (const q of qs) {
+        if (meta.type === 'subjective') {
+          newSubj.push({
+            id:             generateSqId(),
+            section:        q.section || meta.section || 'Theory',
+            text:           q.text || '',
+            marks:          q.marks ?? meta.marks_per_question ?? 10,
+            content_format: q.content_format || 'markdown',
+          });
+        } else {
+          newMcq.push({
+            id:             generateId(),
+            section:        q.section || meta.section || 'Aptitude',
+            text:           q.text   || '',
+            optA:           q.optA   || '',
+            optB:           q.optB   || '',
+            optC:           q.optC   || '',
+            optD:           q.optD   || '',
+            ans:            q.ans    || 'A',
+            content_format: q.content_format || 'markdown',
+          });
+        }
+      }
+    }
+
+    if (newMcq.length)  setQuestions(prev        => [...prev, ...newMcq]);
+    if (newSubj.length) setSubjectiveQuestions(prev => [...prev, ...newSubj]);
   };
 
   const handlePublish = async (status) => {
@@ -304,6 +340,10 @@ export default function ScheduleTest({ initialData, onBack }) {
                   <Upload size={15} /> Import Aiken
                   <input type="file" accept=".txt" className="hidden" onChange={handleAikenImport} />
                 </label>
+                <MarkdownZipImporter
+                  onImport={handleMarkdownImport}
+                  className="inline-flex"
+                />
                 <button
                   onClick={addQuestion}
                   className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
@@ -387,12 +427,18 @@ export default function ScheduleTest({ initialData, onBack }) {
                 <BookOpen size={18} className="text-blue-600" /> Subjective Questions
                 <span className="text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">{subjectiveQuestions.length}</span>
               </h2>
-              <button
-                onClick={addSubjectiveQ}
-                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
-              >
-                <Plus size={15} /> Add Question
-              </button>
+              <div className="flex gap-2 items-center">
+                <MarkdownZipImporter
+                  onImport={handleMarkdownImport}
+                  className="inline-flex"
+                />
+                <button
+                  onClick={addSubjectiveQ}
+                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
+                >
+                  <Plus size={15} /> Add Question
+                </button>
+              </div>
             </div>
 
             {subjectiveQuestions.length === 0 && (

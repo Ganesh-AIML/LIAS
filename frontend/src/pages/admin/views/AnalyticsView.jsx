@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import QuestionRenderer from '../../../components/exam/QuestionRenderer';
 import {
   ArrowLeft, Users, CheckCircle, Target, Trophy,
   BookOpen, Code2, BrainCircuit, BarChart2, Download,
@@ -204,7 +205,9 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
                 const answer = student.subjectiveAnswers?.[sq.id];
                 return (
                   <div key={sq.id} className="border border-slate-200 rounded-xl p-4 space-y-2">
-                    <p className="text-sm font-bold text-slate-700">{sq.text}</p>
+                    <div className="text-sm font-bold text-slate-700">
+                      <QuestionRenderer text={sq.text} format={sq.content_format || 'plain'} />
+                    </div>
                     {answer ? (
                       <AnswerRenderer markdown={answer} />
                     ) : (

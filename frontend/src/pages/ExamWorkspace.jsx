@@ -23,6 +23,7 @@ import { useTrueTime } from "../hooks/useTrueTime";
 const SubjectiveEditor = lazy(
   () => import("../components/exam/SubjectiveEditor"),
 );
+import QuestionRenderer from "../components/exam/QuestionRenderer";
 const Editor = lazy(() => import("@monaco-editor/react"));
 
 const SUPPORTED_LANGUAGES = [
@@ -218,7 +219,15 @@ export default function ExamWorkspace() {
 
   // 🚀 FIX: Removed 'React.' prefix and used the imported 'useMemo'
   const flatQuestions = useMemo(
-    () => examData?.sections?.flatMap((s) => s.questions || []) || [],
+    () =>
+      examData?.sections?.flatMap((s) =>
+        (s.questions || []).map((q) => ({
+          ...q,
+          sectionName:    q.sectionName    || s.name || "General Section",
+          content_format: q.content_format || "plain",
+          marks:          q.marks          ?? s.marks_per_question ?? 1,
+        }))
+      ) || [],
     [examData],
   );
 
@@ -712,9 +721,9 @@ export default function ExamWorkspace() {
               </span>
             </div>
 
-            <h2 className="text-xl font-bold text-slate-900 mb-8 leading-relaxed whitespace-pre-wrap">
-              {currentQ.text}
-            </h2>
+            <div className="text-xl font-bold text-slate-900 mb-8 leading-relaxed">
+              <QuestionRenderer text={currentQ.text} format={currentQ.content_format} />
+            </div>
 
             <div className="space-y-3">
               {currentQ.shuffledOptions ? (
@@ -746,7 +755,7 @@ export default function ExamWorkspace() {
                         <strong className="mr-2 text-slate-400">
                           {index + 1}.
                         </strong>
-                        {option.text}
+                        <QuestionRenderer text={option.text} format={currentQ.content_format} />
                       </span>
                     </button>
                   );
@@ -818,6 +827,9 @@ const renderSubjectiveSection = () => {
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{q.section} — Q{idx + 1}</span>
             <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded font-bold">{q.marks} marks</span>
+          </div>
+          <div className="mb-4 text-slate-900 font-medium leading-relaxed">
+            <QuestionRenderer text={q.text} format={q.content_format} />
           </div>
           <Suspense fallback={<div className="h-40 flex items-center justify-center text-slate-400 text-sm">Loading editor...</div>}>
             <SubjectiveEditor

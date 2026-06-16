@@ -31,6 +31,7 @@ class Exam(Base):
     coding_problems = relationship("CodingProblem", back_populates="exam", cascade="all, delete-orphan")
     sessions        = relationship("ExamSession", back_populates="exam", cascade="all, delete-orphan")
     subjective_questions = relationship("SubjectiveQuestion", back_populates="exam", cascade="all, delete-orphan")
+    sections        = relationship("Section", back_populates="exam", cascade="all, delete-orphan")
 
 class ExamSession(Base):
     __tablename__ = "exam_sessions"
@@ -77,8 +78,15 @@ class Question(Base):
     optC     = Column(String, nullable=False)
     optD     = Column(String, nullable=False)
     ans      = Column(String, nullable=False) # 'A', 'B', 'C', or 'D'
-    
-    exam = relationship("Exam", back_populates="questions")
+
+    # ── SECTION/RICH-CONTENT SUPPORT (additive, all nullable/defaulted for backward compat) ──
+    section_id     = Column(String, ForeignKey("sections.id", ondelete="SET NULL"), nullable=True)
+    order_index    = Column(Integer, default=0)
+    marks          = Column(Integer, default=1)          # legacy grading hardcoded +=1; default preserves that
+    content_format = Column(String, default="plain")     # 'plain' (legacy) | 'markdown' (rich)
+
+    exam        = relationship("Exam", back_populates="questions")
+    section_ref = relationship("Section", back_populates="questions")
 
 
 class CodingProblem(Base):
@@ -115,4 +123,26 @@ class SubjectiveQuestion(Base):
     section  = Column(String, nullable=False)   # display label e.g. "Theory"
     text     = Column(Text, nullable=False)
     marks    = Column(Integer, default=10)
-    exam     = relationship("Exam", back_populates="subjective_questions")
+
+    # ── SECTION/RICH-CONTENT SUPPORT (additive) ──
+    section_id     = Column(String, ForeignKey("sections.id", ondelete="SET NULL"), nullable=True)
+    order_index    = Column(Integer, default=0)
+    content_format = Column(String, default="plain")
+
+    exam        = relationship("Exam", back_populates="subjective_questions")
+    section_ref = relationship("Section", back_populates="subjective_questions")
+
+
+class Section(Base):
+    """First-class Section entity: groups questions with shared marks/ordering/type."""
+    __tablename__ = "sections"
+    id                  = Column(String, primary_key=True, index=True)
+    exam_id             = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False, index=True)
+    name                = Column(String, nullable=False)
+    type                = Column(String, nullable=False, default="mcq")   # 'mcq' | 'subjective'
+    marks_per_question  = Column(Integer, default=1)
+    order_index         = Column(Integer, default=0)
+
+    exam = relationship("Exam", back_populates="sections")
+    questions             = relationship("Question", back_populates="section_ref")
+    subjective_questions  = relationship("SubjectiveQuestion", back_populates="section_ref")

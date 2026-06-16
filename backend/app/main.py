@@ -27,6 +27,23 @@ async def lifespan(app):
             db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
             db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_secret VARCHAR;"))
             db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_secret VARCHAR;"))
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS sections (
+                    id VARCHAR PRIMARY KEY,
+                    exam_id VARCHAR NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+                    name VARCHAR NOT NULL,
+                    type VARCHAR NOT NULL DEFAULT 'mcq',
+                    marks_per_question INTEGER DEFAULT 1,
+                    order_index INTEGER DEFAULT 0
+                );
+            """))
+            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS section_id VARCHAR;"))
+            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0;"))
+            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS marks INTEGER DEFAULT 1;"))
+            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS content_format VARCHAR DEFAULT 'plain';"))
+            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS section_id VARCHAR;"))
+            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0;"))
+            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS content_format VARCHAR DEFAULT 'plain';"))
             db.commit()
         except Exception:
             db.rollback()

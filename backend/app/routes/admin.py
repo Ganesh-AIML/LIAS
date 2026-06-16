@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
 import base64
 from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "b3Nf8x_T2lQ4vG9b_X1vR5wP3yL8sJ2nR7tC6qK9hM0=")
 cipher_suite = Fernet(ENCRYPTION_KEY.encode('utf-8'))
@@ -51,6 +51,10 @@ class QuestionPayload(BaseModel):
     optC: str
     optD: str
     ans: str
+    section_id: Optional[str] = None
+    order_index: int = 0
+    marks: int = 1
+    content_format: str = "plain"
 
 class TestCasePayload(BaseModel):
     input: str
@@ -64,10 +68,20 @@ class CodingProblemPayload(BaseModel):
     languages: str
     testCases: List[TestCasePayload] = []
 
+class SectionPayload(BaseModel):
+    id: Optional[str] = None
+    name: str
+    type: str = "mcq"            # 'mcq' | 'subjective'
+    marks_per_question: int = 1
+    order_index: int = 0
+
 class SubjectiveQuestionPayload(BaseModel):
     section: str
     text: str
     marks: int = 10
+    section_id: Optional[str] = None
+    order_index: int = 0
+    content_format: str = "plain"
 
     @field_validator('text')
     @classmethod
@@ -90,6 +104,7 @@ class ExamCreatePayload(BaseModel):
     questions:           List[QuestionPayload] = []
     coding_problems:     List[CodingProblemPayload] = []
     subjective_questions: List[SubjectiveQuestionPayload] = []
+    sections:            List[SectionPayload] = []
 
     @field_validator("title")
     @classmethod
@@ -129,6 +144,17 @@ def create_exam(
         )
         db.add(new_exam)
 
+        # 2b. Build Section Objects (must exist before questions reference them)
+        section_id_map = {}  # client-supplied section.id -> generated db id
+        for s_idx, s in enumerate(payload.sections):
+            sec_id = f"sec_{exam_id}_{s_idx}_{uuid.uuid4().hex[:6]}"
+            if s.id:
+                section_id_map[s.id] = sec_id
+            db.add(Section(
+                id=sec_id, exam_id=exam_id, name=s.name, type=s.type,
+                marks_per_question=s.marks_per_question, order_index=s.order_index
+            ))
+
         # 3. Build Question (MCQ) Objects
         for idx, q in enumerate(payload.questions):
             new_q = Question(
@@ -140,7 +166,11 @@ def create_exam(
                 optB    = q.optB,
                 optC    = q.optC,
                 optD    = q.optD,
-                ans     = q.ans
+                ans     = q.ans,
+                section_id     = section_id_map.get(q.section_id, q.section_id),
+                order_index    = q.order_index,
+                marks          = q.marks,
+                content_format = q.content_format if q.content_format in ("plain", "markdown") else "plain",
             )
             db.add(new_q)
 
@@ -175,6 +205,9 @@ def create_exam(
                 section = sq.section,
                 text    = sq.text,
                 marks   = sq.marks,
+                section_id     = section_id_map.get(sq.section_id, sq.section_id),
+                order_index    = sq.order_index,
+                content_format = sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
             ))
 
         # 5. Atomic Commit (All or Nothing)
@@ -221,13 +254,28 @@ def update_exam(
         db.query(Question).filter(Question.exam_id == exam_id).delete()
         db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete()
         db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete()
+        db.query(Section).filter(Section.exam_id == exam_id).delete()
+
+        # 2b. Re-insert Sections (must exist before questions reference them)
+        section_id_map = {}
+        for s_idx, s in enumerate(payload.sections):
+            sec_id = f"sec_{exam_id}_{s_idx}_{uuid.uuid4().hex[:6]}"
+            if s.id:
+                section_id_map[s.id] = sec_id
+            db.add(Section(
+                id=sec_id, exam_id=exam_id, name=s.name, type=s.type,
+                marks_per_question=s.marks_per_question, order_index=s.order_index
+            ))
 
         # 3. Re-insert new Questions
         for idx, q in enumerate(payload.questions):
             new_q = Question(
                 id=f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
                 exam_id=exam_id, section=q.section, text=q.text,
-                optA=q.optA, optB=q.optB, optC=q.optC, optD=q.optD, ans=q.ans
+                optA=q.optA, optB=q.optB, optC=q.optC, optD=q.optD, ans=q.ans,
+                section_id=section_id_map.get(q.section_id, q.section_id),
+                order_index=q.order_index, marks=q.marks,
+                content_format=q.content_format if q.content_format in ("plain", "markdown") else "plain",
             )
             db.add(new_q)
 
@@ -254,6 +302,9 @@ def update_exam(
             section = sq.section,
             text    = sq.text,
             marks   = sq.marks,
+            section_id=section_id_map.get(sq.section_id, sq.section_id),
+            order_index=sq.order_index,
+            content_format=sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
             ))
 
         db.commit()
@@ -315,12 +366,16 @@ def get_exam_analytics(
         code_answers = payload.get("coding", {}) # Format: {"cp_123": {"code": "...", "score": 10, "runtime": 0.5, "results": [...]}}
 
         # ── GRADE MCQs ──
+        section_scores = {}
         for q_id, ans in mcq_answers.items():
-            if q_id in q_map and q_map[q_id].ans == ans:
-                if q_map[q_id].section.lower() == 'aptitude':
-                    apt_score += 1
+            q = q_map.get(q_id)
+            if q and q.ans == ans:
+                pts = q.marks or 1
+                section_scores[q.section] = section_scores.get(q.section, 0) + pts
+                if q.section.lower() == 'aptitude':
+                    apt_score += pts
                 else:
-                    tech_score += 1
+                    tech_score += pts
         
         # ── EXTRACT CODING RESULTS ──
         for cp in coding_probs:
@@ -359,6 +414,7 @@ def get_exam_analytics(
             "joined_at": s.created_at,
             "apt_score": apt_score,
             "tech_score": tech_score,
+            "section_scores": section_scores,
             "cod_score": cod_score,
             "coding_submissions": coding_submissions,
             "subjective_answers": subj_payload
@@ -383,17 +439,19 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam: raise HTTPException(status_code=404)
     
-    qs = db.query(Question).filter(Question.exam_id == exam_id).all()
+    qs = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
     cps = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    sqs = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
+    sqs = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).order_by(SubjectiveQuestion.order_index).all()
+    secs = db.query(Section).filter(Section.exam_id == exam_id).order_by(Section.order_index).all()
     
     return {"success": True, "data": {
         "id": exam.id,
         "title": exam.title,
         "duration_minutes": exam.duration_seconds // 60,
-        "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans} for q in qs],
+        "sections": [{"id": s.id, "name": s.name, "type": s.type, "marks_per_question": s.marks_per_question, "order_index": s.order_index} for s in secs],
+        "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans, "section_id": q.section_id, "order_index": q.order_index, "marks": q.marks, "content_format": q.content_format} for q in qs],
         "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps],
-        "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text, "marks": sq.marks} for sq in sqs]
+        "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text, "marks": sq.marks, "section_id": sq.section_id, "order_index": sq.order_index, "content_format": sq.content_format} for sq in sqs]
     }}
 
 @router.get("/exams/{exam_id}/monitor")
@@ -617,6 +675,7 @@ def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Dep
         db.query(ExamSession).filter(ExamSession.exam_id == exam_id).delete(synchronize_session=False)
         db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).delete(synchronize_session=False)
         db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete(synchronize_session=False)
+        db.query(Section).filter(Section.exam_id == exam_id).delete(synchronize_session=False)
         # 4. Finally, safely delete the parent Exam
         db.query(Exam).filter(Exam.id == exam_id).delete(synchronize_session=False)
         db.commit()

@@ -5,7 +5,8 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { adminApi } from '../../../hooks/useAdminApi'; // Make sure this path is correct
+import { adminApi } from '../../../hooks/useAdminApi';
+import QuestionRenderer from '../../../components/exam/QuestionRenderer';
 
 export default function UpcomingTestPreview({ test, onBack, onEdit }) {
   const [currentQIndex, setCurrentQIndex] = useState(0);
@@ -13,7 +14,6 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
   const [fullTestData, setFullTestData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 🚀 NEW: Fetch the deep data containing the questions
   useEffect(() => {
     const fetchFullExam = async () => {
       try {
@@ -34,7 +34,13 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
       fullTestData.questions.forEach(q => {
         questions.push({
           id: q.id, type: 'mcq', section: q.section, text: q.text,
-          options: [{ id: 'A', text: q.optA }, { id: 'B', text: q.optB }, { id: 'C', text: q.optC }, { id: 'D', text: q.optD }],
+          content_format: q.content_format || 'plain',
+          options: [
+            { id: 'A', text: q.optA, content_format: q.content_format || 'plain' },
+            { id: 'B', text: q.optB, content_format: q.content_format || 'plain' },
+            { id: 'C', text: q.optC, content_format: q.content_format || 'plain' },
+            { id: 'D', text: q.optD, content_format: q.content_format || 'plain' },
+          ],
           correct: q.ans
         });
       });
@@ -42,7 +48,9 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
     if (fullTestData?.coding_problems) {
       fullTestData.coding_problems.forEach(cp => {
         questions.push({
-          id: cp.id, type: 'coding', section: 'Programming', title: cp.title, text: cp.description, constraints: cp.constraints
+          id: cp.id, type: 'coding', section: 'Programming',
+          title: cp.title, text: cp.description, constraints: cp.constraints,
+          content_format: 'markdown',
         });
       });
     }
@@ -54,7 +62,7 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
   if (loading) return <div className="p-20 text-center font-bold animate-pulse text-slate-400">Loading Exam Manifest...</div>;
 
   return (
-    <div className="space-y-6 ">
+    <div className="space-y-6">
       
       {/* HEADER */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex justify-between items-center">
@@ -107,7 +115,10 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
             <div className="p-8 flex-1 overflow-y-auto">
               {activeQ.type === 'mcq' ? (
                 <div className="max-w-3xl">
-                  <p className="text-lg font-semibold text-slate-900 mb-8 whitespace-pre-wrap leading-relaxed">{activeQ.text}</p>
+                  {/* Question text — rich or plain */}
+                  <div className="text-lg font-semibold text-slate-900 mb-8 leading-relaxed">
+                    <QuestionRenderer text={activeQ.text} format={activeQ.content_format} />
+                  </div>
                   <div className="grid grid-cols-1 gap-4">
                     {activeQ.options.map(opt => (
                       <button
@@ -122,7 +133,10 @@ export default function UpcomingTestPreview({ test, onBack, onEdit }) {
                         <span className={`w-8 h-8 flex items-center justify-center rounded-lg font-bold text-sm ${
                           selectedAnswers[currentQIndex] === opt.id ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-500'
                         }`}>{opt.id}</span>
-                        <span className="font-semibold text-sm">{opt.text}</span>
+                        {/* Option text — rich or plain */}
+                        <span className="font-semibold text-sm flex-1">
+                          <QuestionRenderer text={opt.text} format={opt.content_format} />
+                        </span>
                       </button>
                     ))}
                   </div>

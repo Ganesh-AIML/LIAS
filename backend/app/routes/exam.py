@@ -10,7 +10,7 @@ from sqlalchemy import func
 from pydantic import BaseModel, ValidationError, Field, field_validator
 from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion
+from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion, Section
 from app.limiter import limiter
 
 router = APIRouter()
@@ -169,31 +169,79 @@ def load_exam_workspace(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     # 1. Fetch dynamic questions and coding tasks attached to this test ID
-    db_questions = db.query(Question).filter(Question.exam_id == exam_id).all()
-    db_coding    = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+    db_questions  = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
+    db_coding     = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+    db_subjective = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).order_by(SubjectiveQuestion.order_index).all()
 
-    # 2. Map and group questions by their custom section name dynamically
-    sections_map = defaultdict(list)
+    # 2. Load first-class Section rows (new schema); may be empty for legacy exams
+    db_sections = (
+        db.query(Section)
+        .filter(Section.exam_id == exam_id)
+        .order_by(Section.order_index)
+        .all()
+    )
+
+    # Build a lookup: section db-id → Section row (for new exams with explicit sections)
+    section_by_id = {s.id: s for s in db_sections}
+
+    # 3. Group MCQ questions by section, preserving order
+    #    For new exams: use section_id → Section.name + marks_per_question
+    #    For legacy exams: fall back to q.section free-text string (existing behaviour)
+    sections_map = defaultdict(list)   # section_name → [question dicts]
+    section_meta = {}                  # section_name → {marks_per_question, order_index, type}
+
     for q in db_questions:
-        sections_map[q.section].append({
-            "id":              q.id,
-            "text":            q.text,
+        if q.section_id and q.section_id in section_by_id:
+            sec = section_by_id[q.section_id]
+            sec_name = sec.name
+            if sec_name not in section_meta:
+                section_meta[sec_name] = {
+                    "marks_per_question": sec.marks_per_question,
+                    "order_index":        sec.order_index,
+                    "type":               sec.type,
+                }
+        else:
+            # Legacy: section is a free-text string, default marks = 1
+            sec_name = q.section or "General"
+            if sec_name not in section_meta:
+                section_meta[sec_name] = {
+                    "marks_per_question": q.marks if q.marks else 1,
+                    "order_index":        0,
+                    "type":               "mcq",
+                }
+
+        sections_map[sec_name].append({
+            "id":             q.id,
+            "text":           q.text,
+            "sectionName":    sec_name,          # threaded onto question — fixes groupedQuestions bug
+            "content_format": q.content_format or "plain",
+            "marks":          q.marks if q.marks else section_meta[sec_name]["marks_per_question"],
             "shuffledOptions": [
                 {"label": "A", "text": q.optA},
                 {"label": "B", "text": q.optB},
                 {"label": "C", "text": q.optC},
                 {"label": "D", "text": q.optD},
-            ]
+            ],
         })
 
-    # Transform grouped map back into structured array matching workspace layout
-    formatted_sections = []
-    for section_name, questions_list in sections_map.items():
-        formatted_sections.append({
-            "name":      section_name,
-            "category":  "Technical" if "tech" in section_name.lower() else "Aptitude",
-            "questions": questions_list
-        })
+    # 4. Build formatted_sections sorted by order_index
+    formatted_sections = sorted(
+        [
+            {
+                "name":               sec_name,
+                "category":           "Technical" if "tech" in sec_name.lower() else "Aptitude",
+                "marks_per_question": meta["marks_per_question"],
+                "order_index":        meta["order_index"],
+                "type":               meta["type"],
+                "questions":          questions_list,
+            }
+            for sec_name, questions_list in sections_map.items()
+            for meta in [section_meta[sec_name]]
+        ],
+        key=lambda s: s["order_index"],
+    )
+
+    db_coding = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
 
     # 3. Format coding tasks for compilation testing
     formatted_coding = []
@@ -205,12 +253,22 @@ def load_exam_workspace(
             "constraints": cp.constraints or "",
             "marks":       10  # Standard point allocation weight
         })
-    
-    db_subjective = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
-    formatted_subjective = [
-        {"id": sq.id, "text": sq.text, "section": sq.section, "marks": sq.marks}
-        for sq in db_subjective
-    ]
+
+    # 5. Format subjective questions with section name + content_format
+    formatted_subjective = []
+    for sq in db_subjective:
+        if sq.section_id and sq.section_id in section_by_id:
+            sq_section_name = section_by_id[sq.section_id].name
+        else:
+            sq_section_name = sq.section or "General"
+        formatted_subjective.append({
+            "id":             sq.id,
+            "text":           sq.text,
+            "section":        sq_section_name,
+            "sectionName":    sq_section_name,
+            "marks":          sq.marks,
+            "content_format": sq.content_format or "plain",
+        })
 
     return {
         "success": True,
