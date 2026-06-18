@@ -29,6 +29,7 @@
 import JSZip from 'jszip';
 import React, { useRef, useState, lazy, Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { normalizeMath } from '../../utils/normalizeMath';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -41,6 +42,24 @@ const KATEX_OPTIONS = {
   throwOnError: false,
   errorColor: '#cc0000',
 };
+
+// ─── Safe URL transform for ReactMarkdown ────────────────────────────────────
+// ReactMarkdown v10 strips data: URLs by default (defaultUrlTransform).
+// We override to allow only safe image mime types as data: URLs.
+// All other data: schemes (javascript:, data:text/html, etc.) are blocked.
+
+const SAFE_DATA_IMAGE_RE = /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i;
+
+function safeUrlTransform(url) {
+  if (typeof url !== 'string') return '';
+  if (url.startsWith('data:')) {
+    return SAFE_DATA_IMAGE_RE.test(url) ? url : '';
+  }
+  // Delegate non-data URLs to default safe-list (http, https, mailto, etc.)
+  // ReactMarkdown's defaultUrlTransform handles this; replicate minimal version:
+  const safe = /^(https?|mailto|tel):/i.test(url) || url.startsWith('/') || url.startsWith('#');
+  return safe ? url : '';
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -172,7 +191,7 @@ function parseMcqBlock(rawBlock, imagesMap, questionLabel, errors) {
     errors.push({ location: questionLabel, message: 'Missing or invalid Answer line.' });
   }
 
-  const text = inlineImages(bodyLines.join('\n').trim(), imagesMap, questionLabel, errors);
+  const text = normalizeMath(inlineImages(bodyLines.join('\n').trim(), imagesMap, questionLabel, errors));
 
   return {
     text,
@@ -188,7 +207,7 @@ function parseMcqBlock(rawBlock, imagesMap, questionLabel, errors) {
 // ─── Subjective block parser ───────────────────────────────────────────────────
 
 function parseSubjectiveBlock(rawBlock, imagesMap, questionLabel, errors) {
-  const text = inlineImages(rawBlock.trim(), imagesMap, questionLabel, errors);
+  const text = normalizeMath(inlineImages(rawBlock.trim(), imagesMap, questionLabel, errors));
   if (!text) {
     errors.push({ location: questionLabel, message: 'Question body is empty.' });
   }
@@ -409,6 +428,7 @@ function PreviewModal({ sections, onClose, onConfirm }) {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[[rehypeKatex, KATEX_OPTIONS]]}
+                urlTransform={safeUrlTransform}
                 components={{
                   img: ({ src, alt }) => (
                     <img src={src} alt={alt || ''} loading="lazy"

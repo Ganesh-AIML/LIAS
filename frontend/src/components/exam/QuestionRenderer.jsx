@@ -21,6 +21,7 @@ import remarkGfm    from 'remark-gfm';
 import remarkMath   from 'remark-math';
 import rehypeKatex  from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { normalizeMath } from '../../utils/normalizeMath';
 
 // Allowed HTML element types produced by the ReactMarkdown AST.
 // Extends AnswerRenderer's list to include img, table family, pre/code, headings.
@@ -132,6 +133,15 @@ const KATEX_OPTIONS = { strict: false, trust: true, throwOnError: false, errorCo
 const REMARK_PLUGINS = [remarkGfm, remarkMath];
 const REHYPE_PLUGINS = [[rehypeKatex, KATEX_OPTIONS]];
 
+// Allow base64 image data URLs; block all other data: schemes.
+const SAFE_DATA_IMAGE_RE = /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i;
+function safeUrlTransform(url) {
+  if (typeof url !== 'string') return '';
+  if (url.startsWith('data:')) return SAFE_DATA_IMAGE_RE.test(url) ? url : '';
+  const safe = /^(https?|mailto|tel):/i.test(url) || url.startsWith('/') || url.startsWith('#');
+  return safe ? url : '';
+}
+
 export default function QuestionRenderer({ text = '', format = 'plain', className = '' }) {
   if (!format || format !== 'markdown') {
     // Legacy plain-text path — identical byte-for-byte behaviour to current code
@@ -152,9 +162,10 @@ export default function QuestionRenderer({ text = '', format = 'plain', classNam
         rehypePlugins={REHYPE_PLUGINS}
         allowedElements={ALLOWED_ELEMENTS}
         unwrapDisallowed
+        urlTransform={safeUrlTransform}
         components={COMPONENTS}
       >
-        {text}
+        {normalizeMath(text)}
       </ReactMarkdown>
     </div>
   );
