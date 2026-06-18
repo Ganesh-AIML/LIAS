@@ -88,8 +88,8 @@ class SubjectiveQuestionPayload(BaseModel):
     def text_not_empty(cls, v):
         if not v or not v.strip():
             raise ValueError("Question text cannot be empty.")
-        if len(v) > 2000:
-            raise ValueError("Question text too long.")
+        if len(v) > 500_000:
+            raise ValueError("Question text too long (max 500,000 characters).")
         return v
 
 class ExamCreatePayload(BaseModel):

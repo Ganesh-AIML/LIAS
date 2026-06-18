@@ -25,7 +25,11 @@ async function request(path, options = {}) {
   
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `HTTP ${res.status}`);
+    // FastAPI 422 detail is an Array of validation errors; stringify it for display.
+    const detail = Array.isArray(body.detail)
+      ? body.detail.map(e => `${e.loc?.slice(-1)[0] ?? 'field'}: ${e.msg}`).join('; ')
+      : (body.detail || `HTTP ${res.status}`);
+    throw new Error(detail);
   }
   
   return res.json();
