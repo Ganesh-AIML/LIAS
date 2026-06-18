@@ -34,6 +34,14 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 
+// KaTeX options — permissive mode so \begin{aligned}, \text{}, etc. all render
+const KATEX_OPTIONS = {
+  strict: false,
+  trust: true,
+  throwOnError: false,
+  errorColor: '#cc0000',
+};
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_IMAGE_BYTES   = 2 * 1024 * 1024;   // 2 MB per image
@@ -400,7 +408,7 @@ function PreviewModal({ sections, onClose, onConfirm }) {
             <div className="text-base font-medium text-slate-900 mb-6 leading-relaxed">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
+                rehypePlugins={[[rehypeKatex, KATEX_OPTIONS]]}
                 components={{
                   img: ({ src, alt }) => (
                     <img src={src} alt={alt || ''} loading="lazy"

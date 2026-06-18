@@ -128,8 +128,9 @@ const COMPONENTS = {
   ),
 };
 
+const KATEX_OPTIONS = { strict: false, trust: true, throwOnError: false, errorColor: '#cc0000' };
 const REMARK_PLUGINS = [remarkGfm, remarkMath];
-const REHYPE_PLUGINS = [rehypeKatex];
+const REHYPE_PLUGINS = [[rehypeKatex, KATEX_OPTIONS]];
 
 export default function QuestionRenderer({ text = '', format = 'plain', className = '' }) {
   if (!format || format !== 'markdown') {
