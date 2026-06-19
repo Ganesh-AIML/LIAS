@@ -19,6 +19,7 @@ logger = logging.getLogger("scope")
 ALLOWED_EVENTS = {
     "tab_switch", "fullscreen_exit", "copy_paste", "devtools",
     "face_absent", "multi_person", "right_click", "keyboard_shortcut",
+    "object_detected", "proctor_head_pose",
 }
 
 # Grace period (seconds) after exam end before late submissions are rejected
@@ -157,6 +158,7 @@ def get_available_tests(
 
     # Build past results list by joining with Exam records
     past_exam_ids = [s.exam_id for s in past_sessions]
+    submitted_exam_ids = set(past_exam_ids)
     past_exams_map = {}
     if past_exam_ids:
         past_exam_records = db.query(Exam).filter(Exam.id.in_(past_exam_ids)).all()
@@ -193,7 +195,7 @@ def get_available_tests(
                     "duration":       exam_record.duration_seconds // 60,
                     "codingDuration": exam_record.coding_duration_minutes or 60,
                 }
-            ] if exam_record else [],
+            ] if exam_record and exam_record.id not in submitted_exam_ids else [],
             "pastResults": past_results,
         },
     }
@@ -222,6 +224,19 @@ def load_exam_workspace(
     # AUD-028 FIX: Block access if exam has not started yet
     if exam_record.starts_at > time.time():
         raise HTTPException(status_code=403, detail="Exam has not started yet.")
+
+    # Block re-entry after submission
+    existing_submission = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.student_id   == active_session.student_id,
+            ExamSession.exam_id      == exam_id,
+            ExamSession.is_submitted == True,  # noqa: E712
+        )
+        .first()
+    )
+    if existing_submission:
+        raise HTTPException(status_code=403, detail="Exam already submitted.")
 
     # 1. Fetch dynamic questions and coding tasks attached to this test ID
     db_questions  = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()

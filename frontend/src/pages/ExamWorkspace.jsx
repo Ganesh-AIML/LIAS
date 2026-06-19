@@ -18,6 +18,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import api, { violationApi } from "../services/api";
+import { useProctoring } from "../proctoring/useProctoring";
 import { useAuthStore } from "../store/authStore";
 import { useTrueTime } from "../hooks/useTrueTime";
 const SubjectiveEditor = lazy(
@@ -128,6 +129,7 @@ const SmartTimer = ({
 };
 
 export default function ExamWorkspace() {
+  useProctoring('enforcement'); // violations now reported + counted
   const { examId } = useParams();
   const navigate = useNavigate();
 

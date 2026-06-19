@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTrueTime } from '../hooks/useTrueTime'; 
 import { useAuthStore } from '../store/authStore';
 import api, { violationApi } from '../services/api';
+import { useProctoring } from '../proctoring/useProctoring';
 import {
   User, Lock, Clock, Calendar, CheckCircle,
   XCircle, PlayCircle, LogOut, X, Activity, BookOpen, KeyRound,
@@ -45,6 +46,7 @@ const LiveCountdown = ({ rawDate, duration, isUpcoming, ts }) => {
 };
 
 export default function StudentDashboard() {
+  useProctoring('observation'); // local-only warm-up, never reported
   const navigate = useNavigate();
   const clearSession = useAuthStore((state) => state.clearSession);
   

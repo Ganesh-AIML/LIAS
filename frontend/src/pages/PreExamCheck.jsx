@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../services/api';
 import { CheckCircle, XCircle, Monitor, Camera, Mic, Wifi, AlertTriangle, Activity, ShieldCheck } from 'lucide-react';
+import { useProctoring } from '../proctoring/useProctoring';
 
 // Maps browser DOMException names to human-readable causes
 const HARDWARE_ERROR_MAP = {
@@ -20,6 +21,7 @@ const TRANSIENT_ERRORS = new Set(['AbortError', 'NotReadableError']);
 
 export default function PreExamCheck() {
   const navigate = useNavigate();
+  useProctoring('preparing'); // model prefetch only — no camera, no UX change
   const setPreCheckStatus = useAuthStore((state) => state.setPreCheckStatus);
   const videoRef   = useRef(null);
   const streamRef  = useRef(null);
