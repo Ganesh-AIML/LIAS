@@ -432,6 +432,43 @@ def get_exam_analytics(
         }
     }
 
+# ── ACTIVE EXAMS (upcoming + live only) ────────────────────────────────────────
+
+@router.get("/exams/active")
+def list_active_exams(
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns only upcoming and live exams.
+    Used by Test Credentials tab to show assignable exams.
+    Completed and draft exams are excluded.
+    """
+    exams = db.query(Exam).all()
+    now = time.time()
+    result = []
+
+    for exam in exams:
+        if exam.status == "draft":
+            continue
+        end_at = exam.starts_at + exam.duration_seconds
+        if exam.starts_at > now:
+            computed_status = "upcoming"
+        elif now <= end_at:
+            computed_status = "live"
+        else:
+            continue  # completed — skip
+
+        result.append({
+            "id":               exam.id,
+            "title":            exam.title,
+            "duration_minutes": exam.duration_seconds // 60,
+            "starts_at_ms":     exam.starts_at * 1000,
+            "status":           computed_status,
+        })
+
+    return {"success": True, "data": result}
+
 
 # ── 1. GET FULL EXAM DETAILS (For Preview Mode) ─────────────────────────────────
 @router.get("/exams/{exam_id}")
@@ -798,43 +835,6 @@ def delete_master_student(
     db.delete(student)
     db.commit()
     return {"success": True}
-
-# ── ACTIVE EXAMS (upcoming + live only) ────────────────────────────────────────
-
-@router.get("/exams/active")
-def list_active_exams(
-    _: bool = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """
-    Returns only upcoming and live exams.
-    Used by Test Credentials tab to show assignable exams.
-    Completed and draft exams are excluded.
-    """
-    exams = db.query(Exam).all()
-    now = time.time()
-    result = []
-
-    for exam in exams:
-        if exam.status == "draft":
-            continue
-        end_at = exam.starts_at + exam.duration_seconds
-        if exam.starts_at > now:
-            computed_status = "upcoming"
-        elif now <= end_at:
-            computed_status = "live"
-        else:
-            continue  # completed — skip
-
-        result.append({
-            "id":               exam.id,
-            "title":            exam.title,
-            "duration_minutes": exam.duration_seconds // 60,
-            "starts_at_ms":     exam.starts_at * 1000,
-            "status":           computed_status,
-        })
-
-    return {"success": True, "data": result}
 
 
 # ── EXAM ASSIGNMENT (assign master students to an exam) ────────────────────────
