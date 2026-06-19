@@ -1,11 +1,14 @@
 import os
 import time
 import jwt
+import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import ExamSession
+
+logger = logging.getLogger("scope")
 
 SECRET_SIGNING_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_SIGNING_KEY:
@@ -39,6 +42,7 @@ def verify_session_guard(
         session_id: str = payload.get("session_id")
 
         if session_id is None:
+            logger.warning("verify_session_guard: malformed token payload (no session_id)")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Malformed token payload.",
@@ -48,20 +52,30 @@ def verify_session_guard(
             db.query(ExamSession).filter(ExamSession.id == session_id).first()
         )
         if not session_record or session_record.is_revoked:
+            # AUD-011: revoked/invalid session is distinct from a bad token.
+            # Use 401 + a machine-readable code so the frontend interceptor can
+            # show a "session revoked" modal instead of a silent hard redirect.
+            logger.warning(
+                "verify_session_guard: session %s invalid or revoked", session_id
+            )
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Session is invalid or has been revoked.",
+                headers={"WWW-Authenticate": 'Bearer error="SESSION_REVOKED"'},
             )
 
         return session_record
 
     except jwt.ExpiredSignatureError:
         # Issue 7 / 21: explicit 401 so frontend interceptor can redirect to login
+        logger.warning("verify_session_guard: expired token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session expired. Please log in again.",
+            headers={"WWW-Authenticate": 'Bearer error="TOKEN_EXPIRED"'},
         )
     except jwt.PyJWTError:
+        logger.warning("verify_session_guard: token validation failed")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Token validation failed.",

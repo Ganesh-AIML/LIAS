@@ -13,8 +13,11 @@ from cryptography.fernet import Fernet
 import base64
 from app.database import get_db
 from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student
+from app.limiter import limiter
 
-ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "b3Nf8x_T2lQ4vG9b_X1vR5wP3yL8sJ2nR7tC6qK9hM0=")
+ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise ValueError("DB_ENCRYPTION_KEY must be set in environment!")
 cipher_suite = Fernet(ENCRYPTION_KEY.encode('utf-8'))
 
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
@@ -35,7 +38,8 @@ def verify_admin(x_admin_token: str = Header(None)):
 
 # ── LOGIN VERIFICATION ─────────────────────────────────────────────────────────
 @router.get("/verify")
-def verify_admin_login(_: bool = Depends(verify_admin)):
+@limiter.limit("20/minute")  # AUD-008: rate-limit admin token verification
+def verify_admin_login(request: Request, _: bool = Depends(verify_admin)):
     """Explicit endpoint used by the frontend to validate the X-Admin-Token."""
     return {"success": True, "message": "Admin verified"}
 
@@ -95,6 +99,7 @@ class SubjectiveQuestionPayload(BaseModel):
 class ExamCreatePayload(BaseModel):
     title:               str
     duration_minutes:    int
+    coding_duration_minutes: Optional[int] = 60  # AUD-022: configurable, was hardcoded
     starts_at:           float          # Unix timestamp (ms from frontend → divide by 1000)
     start_password:      str
     end_password:        Optional[str]  = None
@@ -140,7 +145,8 @@ def create_exam(
             id=exam_id, title=payload.title, duration_seconds=payload.duration_minutes * 60,
             starts_at=payload.starts_at / 1000.0, status=payload.status,
             start_password_hash=start_hash, end_password_hash=end_hash,
-            start_secret=enc_start, end_secret=enc_end 
+            start_secret=enc_start, end_secret=enc_end,
+            coding_duration_minutes=payload.coding_duration_minutes or 60
         )
         db.add(new_exam)
 
@@ -236,9 +242,19 @@ def update_exam(
         if not exam:
             raise HTTPException(status_code=404, detail="Exam not found.")
 
+        if exam.status not in ("draft", "upcoming"):
+            # AUD-021: purging/replacing questions on a live or completed exam
+            # destroys the mapping between already-submitted answers (keyed by
+            # old question IDs) and the new question set.
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot edit a live or completed exam. Questions are locked once an exam goes live.",
+            )
+
         # 1. Update Meta
         exam.title = payload.title
         exam.duration_seconds = payload.duration_minutes * 60
+        exam.coding_duration_minutes = payload.coding_duration_minutes or 60
         exam.starts_at = payload.starts_at / 1000.0
         exam.status = payload.status
 
@@ -320,12 +336,19 @@ def update_exam(
 @router.get("/exams/{exam_id}/analytics")
 def get_exam_analytics(
     exam_id: str,
+    limit: Optional[int] = None,
+    offset: int = 0,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
     Fetches exam details, auto-grades all MCQ and Coding submissions on the fly,
     and returns the comprehensive analytics matrix expected by the React frontend.
+
+    AUD-014: `limit`/`offset` are optional. Omitting them preserves the original
+    behaviour (return all students) so existing callers are unaffected; callers
+    that need to avoid loading all sessions for large exams can now page through
+    results.
     """
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
@@ -334,7 +357,16 @@ def get_exam_analytics(
     # 1. Fetch Master Data
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False).all()
+
+    session_query = (
+        db.query(ExamSession)
+        .filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False)
+        .order_by(ExamSession.created_at.asc())
+    )
+    total_students = session_query.count()
+    if limit is not None:
+        session_query = session_query.offset(offset).limit(limit)
+    sessions = session_query.all()
 
     # Map questions for O(1) grading lookups
     q_map = {q.id: q for q in questions}
@@ -381,17 +413,15 @@ def get_exam_analytics(
         for cp in coding_probs:
             cp_data = code_answers.get(cp.id)
             if cp_data:
-                # TODO: Replace cp_data.get("score") with server-computed score once Judge0 is integrated. 
-                # Client-submitted scores are NOT trusted for production grading.
-                cod_score += cp_data.get("score", 0)
+                # AUD-009: client-submitted "score" is NEVER trusted. No execution engine
+                # is integrated (business decision). Coding is stored and marked pending
+                # evaluation only; cod_score is not computed from client data.
                 coding_submissions.append({
                     "problemId": cp.id,
                     "problemTitle": cp.title,
                     "isAttempted": True,
-                    "runtime": cp_data.get("runtime", "0.00"),
-                    "memory": cp_data.get("memory", "0"),
+                    "status": "pending_evaluation",
                     "submittedCode": cp_data.get("code", ""),
-                    "testResults": cp_data.get("results", [])
                 })
             else:
                 coding_submissions.append({
@@ -428,7 +458,10 @@ def get_exam_analytics(
             "questions": [{"id": q.id, "section": q.section, "text": q.text} for q in questions],
             "coding_problems": [{"id": cp.id, "title": cp.title} for cp in coding_probs],
             "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text} for sq in db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()],
-            "students": student_results
+            "students": student_results,
+            "total_students": total_students,  # AUD-014: lets callers page through large exams
+            "limit": limit,
+            "offset": offset,
         }
     }
 
@@ -485,6 +518,7 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
         "id": exam.id,
         "title": exam.title,
         "duration_minutes": exam.duration_seconds // 60,
+        "coding_duration_minutes": exam.coding_duration_minutes or 60,
         "sections": [{"id": s.id, "name": s.name, "type": s.type, "marks_per_question": s.marks_per_question, "order_index": s.order_index} for s in secs],
         "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans, "section_id": q.section_id, "order_index": q.order_index, "marks": q.marks, "content_format": q.content_format} for q in qs],
         "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps],
@@ -546,7 +580,8 @@ class BulkDeletePayload(BaseModel):
     tokens: List[str]
 
 @router.post("/students/bulk-delete")
-def bulk_delete_students(payload: BulkDeletePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
+def bulk_delete_students(request: Request, payload: BulkDeletePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     """High-Performance route to delete multiple students at once."""
     if payload.tokens:
         # synchronize_session=False makes bulk deletes massively faster in SQLAlchemy
@@ -574,15 +609,15 @@ def list_students(
     student_ids = [r.student_id for r in records]
     
     # Bulk fetch sessions
-    sessions = (
-        db.query(ExamSession)
-        .filter(
-            ExamSession.student_id.in_(student_ids),
-            ExamSession.is_revoked == False
-        )
-        .order_by(ExamSession.created_at.desc())
-        .all()
+    session_query = db.query(ExamSession).filter(
+        ExamSession.student_id.in_(student_ids),
+        ExamSession.is_revoked == False
     )
+    if exam_id:
+        # AUD-016: scope to the filtered exam instead of loading every
+        # session across all exams for these students.
+        session_query = session_query.filter(ExamSession.exam_id == exam_id)
+    sessions = session_query.order_by(ExamSession.created_at.desc()).all()
     
     session_map = {}
     for s in sessions:
@@ -648,7 +683,8 @@ def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(
     return {"success": True}
 
 @router.delete("/students/{token}")
-def delete_student(token: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
+def delete_student(request: Request, token: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     db.query(TokenRegistry).filter(TokenRegistry.token == token).delete()
     db.commit()
     return {"success": True}
@@ -694,7 +730,8 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     return {"success": True, "data": result}
 
 @router.delete("/exams/{exam_id}")
-def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
+def delete_exam(request: Request, exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     try:
         # 1. Clean up violation logs attached to this exam's sessions
         session_ids = [s.id for s in db.query(ExamSession.id).filter(ExamSession.exam_id == exam_id).all()]
@@ -819,7 +856,9 @@ def update_master_student(
 
 
 @router.delete("/master-students/{student_id}")
+@limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
 def delete_master_student(
+    request: Request,
     student_id: str,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),

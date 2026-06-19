@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 import bcrypt
 from app.database import get_db
-from app.models import TokenRegistry, ExamSession
+from app.models import TokenRegistry, ExamSession, Student
 from app.auth import create_session_jwt, verify_session_guard
 from app.limiter import limiter
 import time
@@ -88,6 +88,16 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
     )
 
     if not token_record or not password_ok:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+        )
+
+    # AUD-018: TokenRegistry.is_active only governs this exam's token. The
+    # master directory's Student.is_active flag must also be honored — an
+    # admin deactivating a student there should block login everywhere.
+    master_student = db.query(Student).filter(Student.id == payload.student_id).first()
+    if master_student and not master_student.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials.",

@@ -1,5 +1,5 @@
 import time
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Float, Text, Index
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Float, Text, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -23,6 +23,11 @@ class TokenRegistry(Base):
     password_hash = Column(String, nullable=False)
     is_active     = Column(Boolean, default=True)
 
+    # AUD-012: Prevent duplicate enrollment rows for same student+exam
+    __table_args__ = (
+        UniqueConstraint('student_id', 'exam_id', name='uq_token_student_exam'),
+    )
+
 
 class Exam(Base):
     __tablename__ = "exams"
@@ -35,6 +40,7 @@ class Exam(Base):
     status              = Column(String, default="upcoming") # draft, upcoming, live, completed
     start_secret = Column(String, nullable=True)
     end_secret   = Column(String, nullable=True)
+    coding_duration_minutes = Column(Integer, default=60)  # AUD-022: was hardcoded to 60
 
     # Relationships - If Exam is deleted, delete all associated content
     questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")
@@ -49,10 +55,11 @@ class ExamSession(Base):
     student_id         = Column(String, nullable=False)
     exam_id            = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
     session_secret     = Column(String, nullable=False)
-    is_revoked         = Column(Boolean, default=False)
-    is_submitted       = Column(Boolean, default=False)
-    created_at         = Column(Float, default=time.time)
-    subjective_payload = Column(Text, nullable=True)
+    is_revoked          = Column(Boolean, default=False)
+    is_submitted        = Column(Boolean, default=False)
+    created_at          = Column(Float, default=time.time)
+    subjective_payload  = Column(Text, nullable=True)
+    submission_payload  = Column(Text, nullable=True)   # AUD-001: MCQ+coding answers JSON
 
     exam = relationship("Exam", back_populates="sessions")
     violations = relationship("ViolationLog", back_populates="session", cascade="all, delete-orphan")

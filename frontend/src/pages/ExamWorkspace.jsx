@@ -143,17 +143,17 @@ export default function ExamWorkspace() {
 
   // 🛡️ RECOVERY ENGINE: Lazy initialization directly from SessionStorage
   const [answers, setAnswers] = useState(() => {
-    const cached = localStorage.getItem(`scope_answers_${examId}`);
+    const cached = sessionStorage.getItem(`scope_answers_${examId}`);
     return cached ? JSON.parse(cached) : {};
   });
 
   const [language, setLanguage] = useState(() => {
-    return localStorage.getItem(`scope_active_lang_${examId}`) || "71";
+    return sessionStorage.getItem(`scope_active_lang_${examId}`) || "71";
   });
 
   const [sourceCode, setSourceCode] = useState(() => {
     return (
-      localStorage.getItem(`scope_active_source_${examId}`) ||
+      sessionStorage.getItem(`scope_active_source_${examId}`) ||
       "// Loading code..."
     );
   });
@@ -164,7 +164,7 @@ export default function ExamWorkspace() {
 
   const [subjectiveAnswers, setSubjectiveAnswers] = useState(() => {
     try {
-      const cached = localStorage.getItem(`scope_subjective_${examId}`);
+      const cached = sessionStorage.getItem(`scope_subjective_${examId}`);
       return cached ? JSON.parse(cached) : {};
     } catch {
       return {};
@@ -213,6 +213,7 @@ export default function ExamWorkspace() {
   const [endPasswordInput, setEndPasswordInput] = useState("");
   const [endPasswordError, setEndPasswordError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const hasSubmittedRef = useRef(false); // AUD-020: hard guard, state alone races
 
   const [consoleHeight, setConsoleHeight] = useState(250);
   const [isResizing, setIsResizing] = useState(false);
@@ -245,6 +246,10 @@ export default function ExamWorkspace() {
 
   // 🛡️ AUTO-SUBMIT: Exponential Retry Queue
   const attemptAutoSubmit = async (retryCount = 0) => {
+    if (retryCount === 0) {
+      if (hasSubmittedRef.current) return; // AUD-020: already submitting/submitted
+      hasSubmittedRef.current = true;
+    }
     setIsSubmitting(true);
     try {
       await api.post(`/exam/${examId}/submit`, {
@@ -253,7 +258,7 @@ export default function ExamWorkspace() {
   subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
 });
       ["answers", "codes", "active_lang", "active_source", "subjective"].forEach((key) =>
-        localStorage.removeItem(`scope_${key}_${examId}`),
+        sessionStorage.removeItem(`scope_${key}_${examId}`),
       );
       navigate("/dashboard");
     } catch (err) {
@@ -287,7 +292,7 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (Object.keys(answers).length > 0) {
       try {
-        localStorage.setItem(
+        sessionStorage.setItem(
           `scope_answers_${examId}`,
           JSON.stringify(answers),
         );
@@ -301,8 +306,8 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (sourceCode && sourceCode !== "// Loading code...") {
       try {
-        localStorage.setItem(`scope_active_source_${examId}`, sourceCode);
-        localStorage.setItem(`scope_active_lang_${examId}`, language);
+        sessionStorage.setItem(`scope_active_source_${examId}`, sourceCode);
+        sessionStorage.setItem(`scope_active_lang_${examId}`, language);
       } catch (e) {
         console.warn(
           "Storage quota exceeded — active source not cached locally",
@@ -315,7 +320,7 @@ export default function ExamWorkspace() {
   useEffect(() => {
     if (Object.keys(subjectiveAnswers).length > 0) {
       try {
-        localStorage.setItem(
+        sessionStorage.setItem(
           `scope_subjective_${examId}`,
           JSON.stringify(subjectiveAnswers),
         );
@@ -509,17 +514,12 @@ export default function ExamWorkspace() {
     loadWorkspace();
   }, [examId]);
 
-  useEffect(() => {
-    if (isTimeUp && !isSubmitting) {
-      setTimeout(() => {
-        setToastMessage("⏳ Time has expired. Auto-submitting exam...");
-        api
-          .post(`/exam/${examId}/submit`, { answers, autoSubmit: true, subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,})
-          .then(() => navigate("/dashboard"))
-          .catch((err) => console.error("Auto-submit failed", err));
-      }, 0);
-    }
-  }, [isTimeUp]);
+  // AUD-020: duplicate auto-submit effect removed. The effect above
+  // (attemptAutoSubmit, with retry + localStorage cleanup) is the single
+  // source of truth for time-up submission. A second independent effect
+  // here previously fired its own bare POST /submit on the same isTimeUp
+  // change, racing with attemptAutoSubmit and causing duplicate-submission
+  // errors.
 
   const toggleReview = (questionId) => {
     setReviewLater((prev) =>
@@ -623,7 +623,7 @@ export default function ExamWorkspace() {
   subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
 });
       ["answers", "codes", "active_lang", "active_source", "subjective"].forEach((key) =>
-        localStorage.removeItem(`scope_${key}_${examId}`),
+        sessionStorage.removeItem(`scope_${key}_${examId}`),
       );
       setShowEndModal(false);
       navigate("/dashboard");
@@ -1146,7 +1146,7 @@ const renderSubjectiveSection = () => {
                           "active_source",
                           "subjective",
                         ].forEach((key) =>
-                          localStorage.removeItem(`scope_${key}_${examId}`),
+                          sessionStorage.removeItem(`scope_${key}_${examId}`),
                         );
                         navigate("/dashboard");
                       })

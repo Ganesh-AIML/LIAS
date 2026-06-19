@@ -90,6 +90,7 @@ export default function ScheduleTest({ initialData, onBack }) {
       ? formatTimeForInput(initialData.starts_at_ms)
       : "",
     duration_minutes: initialData?.duration_minutes || "120",
+    coding_duration_minutes: initialData?.coding_duration_minutes || "60",
     start_password: initialData?.start_password_hash || "",
     end_password: initialData?.end_password_hash || "",
   });
@@ -190,6 +191,7 @@ export default function ScheduleTest({ initialData, onBack }) {
       const payload = {
         ...testMeta,
         duration_minutes: parseInt(testMeta.duration_minutes),
+        coding_duration_minutes: parseInt(testMeta.coding_duration_minutes) || 60,
         starts_at: new Date(testMeta.starts_at).getTime(),
         status: status,
         questions: questions,
@@ -288,6 +290,16 @@ export default function ScheduleTest({ initialData, onBack }) {
                   min="1"
                   value={testMeta.duration_minutes}
                   onChange={(e) => setTestMeta({ ...testMeta, duration_minutes: e.target.value })}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Coding Duration (Minutes)</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={testMeta.coding_duration_minutes}
+                  onChange={(e) => setTestMeta({ ...testMeta, coding_duration_minutes: e.target.value })}
                   className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold"
                 />
               </div>

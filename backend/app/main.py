@@ -79,6 +79,14 @@ def _run_additive_migrations():
             db.rollback()
             logger.warning("Migration skipped: %s", e)
 
+        try:
+            # AUD-022: coding_duration_minutes was hardcoded to 60 server-side
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS coding_duration_minutes INTEGER DEFAULT 60;"))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning("Migration skipped: %s", e)
+
         # ── MASTER DIRECTORY: create students table if it doesn't exist ──
         try:
             db.execute(text("""
@@ -97,15 +105,23 @@ def _run_additive_migrations():
             logger.warning("students table migration skipped: %s", e)
 
         # ── BACKFILL: seed students from existing TokenRegistry unique student_ids ──
-        # Only inserts rows that don't already exist. Password left empty (placeholder).
-        # Admin should set real passwords via Master Directory UI.
+        # Only inserts rows that don't already exist.
+        # AUD-024: empty string is not a valid bcrypt hash and breaks downstream
+        # password comparisons (e.g. assign_students_to_exam). Use a placeholder
+        # bcrypt hash of a random, unguessable value instead — login still requires
+        # an explicit password reset via the Master Directory UI.
         try:
+            import bcrypt as _bcrypt
+            import secrets as _secrets
+            placeholder_hash = _bcrypt.hashpw(
+                _secrets.token_urlsafe(32).encode("utf-8"), _bcrypt.gensalt()
+            ).decode("utf-8")
             db.execute(text("""
                 INSERT INTO students (id, name, password, is_active, created_at)
                 SELECT DISTINCT
                     tr.student_id,
                     NULL,
-                    '',
+                    :placeholder_hash,
                     TRUE,
                     EXTRACT(EPOCH FROM NOW())
                 FROM token_registry tr
@@ -114,7 +130,7 @@ def _run_additive_migrations():
                   AND NOT EXISTS (
                       SELECT 1 FROM students s WHERE s.id = tr.student_id
                   );
-            """))
+            """), {"placeholder_hash": placeholder_hash})
             db.commit()
             logger.info("✅ students backfill complete.")
         except Exception as e:

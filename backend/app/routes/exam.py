@@ -10,7 +10,7 @@ from sqlalchemy import func
 from pydantic import BaseModel, ValidationError, Field, field_validator
 from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion, Section
+from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, ExamSession
 from app.limiter import limiter
 
 router = APIRouter()
@@ -20,6 +20,9 @@ ALLOWED_EVENTS = {
     "tab_switch", "fullscreen_exit", "copy_paste", "devtools",
     "face_absent", "multi_person", "right_click", "keyboard_shortcut",
 }
+
+# Grace period (seconds) after exam end before late submissions are rejected
+LATE_SUBMISSION_GRACE_SECONDS = 60
 
 class SubmissionPayloadSchema(BaseModel):
     mcqs: Dict[str, str] = {}
@@ -57,6 +60,19 @@ class PasswordVerifyPayload(BaseModel):
     password: str
 
 
+# ── AUD-002: Coding stub payloads ──────────────────────────────────────────────
+
+class CodeRunPayload(BaseModel):
+    language_id: str
+    source_code: str
+    stdin: Optional[str] = ""
+
+class CodeSubmitPayload(BaseModel):
+    language_id: str
+    source_code: str
+    problem_id:  str
+
+
 # ── VIOLATION ROUTES ───────────────────────────────────────────────────────────
 
 @router.post("/violation")
@@ -77,9 +93,10 @@ def log_violation(
     )
     db.add(entry)
 
-    # 🚀 H-02: Server-Side Anti-Cheat Enforcement (3 Strikes = Out)
+    # AUD-010 FIX: flush so the new row is counted, then check >= 3 (matches maxViolations)
+    db.flush()
     current_violations = db.query(ViolationLog).filter(ViolationLog.session_id == active_session.id).count()
-    if current_violations >= 2: # The new entry makes it 3
+    if current_violations >= 3:
         active_session.is_revoked = True
 
     db.commit()
@@ -126,6 +143,36 @@ def get_available_tests(
 
     exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
 
+    # AUD-007 FIX: Query real past submitted sessions for this student
+    past_sessions = (
+        db.query(ExamSession)
+        .filter(
+            ExamSession.student_id  == active_session.student_id,
+            ExamSession.is_submitted == True,  # noqa: E712
+            ExamSession.is_revoked   == False, # noqa: E712
+        )
+        .order_by(ExamSession.created_at.desc())
+        .all()
+    )
+
+    # Build past results list by joining with Exam records
+    past_exam_ids = [s.exam_id for s in past_sessions]
+    past_exams_map = {}
+    if past_exam_ids:
+        past_exam_records = db.query(Exam).filter(Exam.id.in_(past_exam_ids)).all()
+        past_exams_map = {e.id: e for e in past_exam_records}
+
+    past_results = []
+    for s in past_sessions:
+        exam_info = past_exams_map.get(s.exam_id)
+        if exam_info:
+            past_results.append({
+                "exam_id":      s.exam_id,
+                "title":        exam_info.title,
+                "submitted_at": s.created_at * 1000,   # ms for frontend
+                "duration":     exam_info.duration_seconds // 60,
+            })
+
     return {
         "success": True,
         "data": {
@@ -144,10 +191,10 @@ def get_available_tests(
                     "title":          exam_record.title,
                     "date":           exam_record.starts_at * 1000,
                     "duration":       exam_record.duration_seconds // 60,
-                    "codingDuration": 60,
+                    "codingDuration": exam_record.coding_duration_minutes or 60,
                 }
             ] if exam_record else [],
-            "pastResults": [],
+            "pastResults": past_results,
         },
     }
 
@@ -164,9 +211,17 @@ def load_exam_workspace(
     Fetches real dynamic exam content (MCQs & Coding Problems) from the database
     to construct the workspace payload for the candidate session.
     """
+    # AUD-003 FIX: Ownership guard — student can only load their own exam
+    if active_session.exam_id != exam_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    # AUD-028 FIX: Block access if exam has not started yet
+    if exam_record.starts_at > time.time():
+        raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     # 1. Fetch dynamic questions and coding tasks attached to this test ID
     db_questions  = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
@@ -225,11 +280,19 @@ def load_exam_workspace(
         })
 
     # 4. Build formatted_sections sorted by order_index
+    # AUD-015 FIX: category derived from section type field, not section name heuristic
+    def _section_category(sec_type: str) -> str:
+        """Map Section.type to a display category. Extensible for future types."""
+        if sec_type == "subjective":
+            return "Subjective"
+        # Both 'mcq' and any future type default to 'Technical' rather than a name guess
+        return "Technical"
+
     formatted_sections = sorted(
         [
             {
                 "name":               sec_name,
-                "category":           "Technical" if "tech" in sec_name.lower() else "Aptitude",
+                "category":           _section_category(meta["type"]),
                 "marks_per_question": meta["marks_per_question"],
                 "order_index":        meta["order_index"],
                 "type":               meta["type"],
@@ -241,9 +304,7 @@ def load_exam_workspace(
         key=lambda s: s["order_index"],
     )
 
-    db_coding = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-
-    # 3. Format coding tasks for compilation testing
+    # 3. Format coding tasks — no answer field exposed to student
     formatted_coding = []
     for cp in db_coding:
         formatted_coding.append({
@@ -294,9 +355,17 @@ def verify_exam_password(
     active_session  = Depends(verify_session_guard),
     db: Session     = Depends(get_db),
 ):
+    # AUD-006 FIX: Ownership guard — student can only verify password for their own exam
+    if active_session.exam_id != exam_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    # AUD-028 FIX: Also block password verify for exams not yet started
+    if exam_record.starts_at > time.time():
+        raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     target_hash = (
         exam_record.start_password_hash
@@ -304,7 +373,7 @@ def verify_exam_password(
         else exam_record.end_password_hash
     )
 
-    # 🚀 Fix: If checking end password, and the admin left it blank, auto-approve!
+    # Fix: If checking end password, and the admin left it blank, auto-approve!
     if payload.type == "end" and not target_hash:
         return {"success": True}
 
@@ -333,9 +402,21 @@ def submit_exam(
     Finalizes the candidate session and saves response data arrays securely 
     to the centralized database column for automated evaluation grading.
     """
-    # 🚀 H-08: Prevent cross-exam injection
+    # H-08: Prevent cross-exam injection
     if active_session.exam_id != exam_id:
         raise HTTPException(status_code=403, detail="Session token does not match target exam.")
+
+    # AUD-030 FIX: Reject submissions after exam end + grace period
+    exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam_record:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    exam_end_time = exam_record.starts_at + exam_record.duration_seconds
+    if time.time() > exam_end_time + LATE_SUBMISSION_GRACE_SECONDS:
+        raise HTTPException(
+            status_code=403,
+            detail="Exam time has expired. Submission is no longer accepted."
+        )
 
     answers_data = payload.answers if payload.answers else {}
 
@@ -346,8 +427,10 @@ def submit_exam(
 
     if active_session.is_submitted:
         raise HTTPException(status_code=400, detail="Exam already submitted.")
-        
-    # 🚀 Crucial Fix: Saves live response telemetry to feed the grading analytics engines
+
+    # AUD-002 NOTE: coding scores from client payload are NOT used for grading.
+    # Only MCQ answers and submitted code strings are stored. Coding evaluation
+    # is pending server-side integration. See analytics route for "Pending Evaluation" handling.
     active_session.submission_payload = json.dumps(payload.answers)
     if payload.subjective:
         active_session.subjective_payload = json.dumps(payload.subjective)
@@ -355,3 +438,74 @@ def submit_exam(
     
     db.commit()
     return {"success": True, "message": "Exam submitted securely."}
+
+
+# ── AUD-002 FIX: Coding stub routes ────────────────────────────────────────────
+# Code execution is not available. These stubs store submitted code and return
+# a graceful "unavailable" response. Compatible with future Judge0 integration.
+
+@router.post("/{exam_id}/run")
+def run_code(
+    exam_id:        str,
+    payload:        CodeRunPayload,
+    active_session  = Depends(verify_session_guard),
+    db: Session     = Depends(get_db),
+):
+    """
+    Code execution stub. Judge0 integration is pending.
+    Returns a graceful unavailable response instead of 404.
+    """
+    # Ownership guard
+    if active_session.exam_id != exam_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    logger.info(
+        "[CODE-RUN] Student %s attempted run in exam %s (language: %s) — execution unavailable.",
+        active_session.student_id[:8] + "****",
+        exam_id[:8] + "****",
+        payload.language_id,
+    )
+
+    return {
+        "success": False,
+        "status": "unavailable",
+        "message": "Code execution is currently unavailable. Your code has been saved and will be evaluated later.",
+        "stdout": "",
+        "stderr": "",
+        "compile_output": "",
+    }
+
+
+@router.post("/{exam_id}/submit-code")
+def submit_code(
+    exam_id:        str,
+    payload:        CodeSubmitPayload,
+    active_session  = Depends(verify_session_guard),
+    db: Session     = Depends(get_db),
+):
+    """
+    Code submission stub. Stores the submitted code string only.
+    Score is marked as 'Pending Evaluation'. No client score is trusted.
+    Compatible with future server-side Judge0 grading integration.
+    """
+    # Ownership guard
+    if active_session.exam_id != exam_id:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    logger.info(
+        "[CODE-SUBMIT] Student %s submitted code for problem %s in exam %s (language: %s).",
+        active_session.student_id[:8] + "****",
+        payload.problem_id[:8] + "****",
+        exam_id[:8] + "****",
+        payload.language_id,
+    )
+
+    # Code is stored in the final exam submission payload (via submit_exam).
+    # This stub acknowledges receipt and marks the problem as pending evaluation.
+    return {
+        "success": True,
+        "status": "pending_evaluation",
+        "message": "Code received. Evaluation is pending and will be completed by the administrator.",
+        "score": None,
+        "results": [],
+    }

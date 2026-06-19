@@ -2,6 +2,10 @@
 *.db
 *.sqlite3
 
+# Student PII (AUD-026)
+students.csv
+*.csv
+
 # Environment
 .env
 
