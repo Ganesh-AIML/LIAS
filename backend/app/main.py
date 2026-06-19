@@ -11,7 +11,7 @@ from app.limiter import limiter
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from app.database import engine, Base, SessionLocal
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Student
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
@@ -78,6 +78,48 @@ def _run_additive_migrations():
         except Exception as e:
             db.rollback()
             logger.warning("Migration skipped: %s", e)
+
+        # ── MASTER DIRECTORY: create students table if it doesn't exist ──
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS students (
+                    id         VARCHAR PRIMARY KEY,
+                    name       VARCHAR,
+                    password   VARCHAR NOT NULL DEFAULT '',
+                    is_active  BOOLEAN DEFAULT TRUE,
+                    created_at FLOAT DEFAULT EXTRACT(EPOCH FROM NOW())
+                );
+            """))
+            db.commit()
+            logger.info("✅ students table ready.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("students table migration skipped: %s", e)
+
+        # ── BACKFILL: seed students from existing TokenRegistry unique student_ids ──
+        # Only inserts rows that don't already exist. Password left empty (placeholder).
+        # Admin should set real passwords via Master Directory UI.
+        try:
+            db.execute(text("""
+                INSERT INTO students (id, name, password, is_active, created_at)
+                SELECT DISTINCT
+                    tr.student_id,
+                    NULL,
+                    '',
+                    TRUE,
+                    EXTRACT(EPOCH FROM NOW())
+                FROM token_registry tr
+                WHERE tr.student_id IS NOT NULL
+                  AND tr.student_id <> ''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM students s WHERE s.id = tr.student_id
+                  );
+            """))
+            db.commit()
+            logger.info("✅ students backfill complete.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("students backfill skipped: %s", e)
 
 _run_additive_migrations()
 # ──────────────────────────────────────────────────────────

@@ -5,6 +5,16 @@ from app.database import Base
 
 # ── 1. EXISTING TABLES (With Relationship Hooks Added) ─────────────────────────
 
+class Student(Base):
+    """Master Directory — canonical student list, independent of any exam."""
+    __tablename__ = "students"
+    id         = Column(String, primary_key=True, index=True)   # e.g. "23-AIML-101"
+    name       = Column(String, nullable=True)                   # optional display name
+    password   = Column(String, nullable=False)                  # bcrypt hash (master credential)
+    is_active  = Column(Boolean, default=True)
+    created_at = Column(Float, default=time.time)
+
+
 class TokenRegistry(Base):
     __tablename__ = "token_registry"
     token         = Column(String, primary_key=True, index=True)

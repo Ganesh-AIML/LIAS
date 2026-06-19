@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
 import base64
 from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "b3Nf8x_T2lQ4vG9b_X1vR5wP3yL8sJ2nR7tC6qK9hM0=")
 cipher_suite = Fernet(ENCRYPTION_KEY.encode('utf-8'))
@@ -685,3 +685,216 @@ def delete_exam(exam_id: str, _: bool = Depends(verify_admin), db: Session = Dep
         db.rollback()
         logger.error(f"Safe cascade delete failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete exam and its nested records.")
+
+
+# ── MASTER DIRECTORY CRUD ───────────────────────────────────────────────────────
+
+class MasterStudentCreatePayload(BaseModel):
+    id: str          # student_id, e.g. "23-AIML-101"
+    name: Optional[str] = None
+    password: str
+    is_active: bool = True
+
+class MasterStudentUpdatePayload(BaseModel):
+    name: Optional[str] = None
+    password: Optional[str] = None  # if omitted, keep existing
+    is_active: bool = True
+
+
+@router.get("/master-students")
+def list_master_students(
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Return all students from Master Directory with their exam enrollments.
+    Each student row includes a list of exam_ids they're enrolled in (from TokenRegistry).
+    """
+    students = db.query(Student).order_by(Student.created_at.desc()).all()
+
+    # Bulk-fetch all enrollments keyed by student_id
+    enrollments = db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token).all()
+    enrollment_map: dict[str, list] = {}
+    for e in enrollments:
+        enrollment_map.setdefault(e.student_id, []).append({
+            "exam_id": e.exam_id,
+            "token":   e.token,
+        })
+
+    result = []
+    for s in students:
+        result.append({
+            "id":          s.id,
+            "name":        s.name,
+            "is_active":   s.is_active,
+            "created_at":  s.created_at,
+            "enrollments": enrollment_map.get(s.id, []),  # [{exam_id, token}, ...]
+        })
+
+    return {"success": True, "data": result}
+
+
+@router.post("/master-students")
+def create_master_student(
+    payload: MasterStudentCreatePayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Add a student to the Master Directory. Fails if student_id already exists."""
+    existing = db.query(Student).filter(Student.id == payload.id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Student '{payload.id}' already exists.")
+
+    hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+    db.add(Student(
+        id=payload.id,
+        name=payload.name,
+        password=hashed,
+        is_active=payload.is_active,
+        created_at=time.time(),
+    ))
+    db.commit()
+    return {"success": True, "id": payload.id}
+
+
+@router.put("/master-students/{student_id}")
+def update_master_student(
+    student_id: str,
+    payload: MasterStudentUpdatePayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Edit name, password, or active status of a master student."""
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    student.is_active = payload.is_active
+    if payload.name is not None:
+        student.name = payload.name
+    if payload.password:
+        student.password = bcrypt.hashpw(
+            payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+        ).decode("utf-8")
+
+    db.commit()
+    return {"success": True}
+
+
+@router.delete("/master-students/{student_id}")
+def delete_master_student(
+    student_id: str,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Remove student from Master Directory.
+    Does NOT delete TokenRegistry rows — enrollment history preserved for audit.
+    """
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    db.delete(student)
+    db.commit()
+    return {"success": True}
+
+# ── ACTIVE EXAMS (upcoming + live only) ────────────────────────────────────────
+
+@router.get("/exams/active")
+def list_active_exams(
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns only upcoming and live exams.
+    Used by Test Credentials tab to show assignable exams.
+    Completed and draft exams are excluded.
+    """
+    exams = db.query(Exam).all()
+    now = time.time()
+    result = []
+
+    for exam in exams:
+        if exam.status == "draft":
+            continue
+        end_at = exam.starts_at + exam.duration_seconds
+        if exam.starts_at > now:
+            computed_status = "upcoming"
+        elif now <= end_at:
+            computed_status = "live"
+        else:
+            continue  # completed — skip
+
+        result.append({
+            "id":               exam.id,
+            "title":            exam.title,
+            "duration_minutes": exam.duration_seconds // 60,
+            "starts_at_ms":     exam.starts_at * 1000,
+            "status":           computed_status,
+        })
+
+    return {"success": True, "data": result}
+
+
+# ── EXAM ASSIGNMENT (assign master students to an exam) ────────────────────────
+
+class AssignStudentsPayload(BaseModel):
+    student_ids: List[str]
+
+
+@router.post("/exams/{exam_id}/assign")
+def assign_students_to_exam(
+    exam_id: str,
+    payload: AssignStudentsPayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk-assign Master Directory students to an exam.
+    - Fetches master password from Student table.
+    - Reuses existing upsert logic: updates if enrolled, inserts if new.
+    - Skips students not found in Master Directory.
+    - Returns counts of created vs updated vs skipped.
+    """
+    import secrets as secrets_mod
+
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    students = db.query(Student).filter(Student.id.in_(payload.student_ids)).all()
+    found_ids = {s.id for s in students}
+    skipped = [sid for sid in payload.student_ids if sid not in found_ids]
+
+    created = 0
+    updated = 0
+
+    for student in students:
+        existing = db.query(TokenRegistry).filter(
+            TokenRegistry.student_id == student.id,
+            TokenRegistry.exam_id == exam_id,
+        ).first()
+
+        if existing:
+            existing.password_hash = student.password
+            existing.is_active = True
+            updated += 1
+        else:
+            token = f"LIAS_{student.id.upper()}_{secrets_mod.token_hex(4).upper()}"
+            db.add(TokenRegistry(
+                token=token,
+                exam_id=exam_id,
+                student_id=student.id,
+                password_hash=student.password,
+                is_active=True,
+            ))
+            created += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+    }
