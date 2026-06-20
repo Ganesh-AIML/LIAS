@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 import bcrypt
 from app.database import get_db
-from app.models import TokenRegistry, ExamSession, Student
+from app.models import TokenRegistry, ExamSession, Student, Exam
 from app.auth import create_session_jwt, verify_session_guard
 from app.limiter import limiter
 import time
@@ -103,6 +103,21 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
             detail="Invalid credentials.",
         )
 
+    # AUD-031 / Issue C: exam credentials must expire 5 min after the exam
+    # ends. Without this, a student can keep logging in indefinitely with
+    # the same token+password long after the exam is over.
+    EXAM_GRACE_SECONDS = 300
+    exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
+    grace_remaining = None
+    if exam_record:
+        grace_deadline = exam_record.starts_at + exam_record.duration_seconds + EXAM_GRACE_SECONDS
+        if time.time() > grace_deadline:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Exam credentials have expired.",
+            )
+        grace_remaining = grace_deadline - time.time()
+
     # Atomic session replacement — revoke old, create new in one transaction
     try:
         existing_session = (
@@ -134,7 +149,10 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
         logger.error("Session creation failed.")
         raise HTTPException(status_code=500, detail="Session error. Please retry.")
 
-    generated_jwt = create_session_jwt(payload.student_id, token_record.exam_id, session_uuid)
+    generated_jwt = create_session_jwt(
+        payload.student_id, token_record.exam_id, session_uuid,
+        max_age_seconds=grace_remaining,
+    )
     logger.info("[AUTH] New session created for exam: %s", token_record.exam_id[:8] + "****")
 
     # Issue 9: session_secret is NOT returned to the frontend.

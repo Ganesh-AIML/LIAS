@@ -21,12 +21,15 @@ ALGORITHM = "HS256"
 security_agent = HTTPBearer()
 
 
-def create_session_jwt(student_id: str, exam_id: str, session_id: str) -> str:
+def create_session_jwt(student_id: str, exam_id: str, session_id: str, max_age_seconds: int = None) -> str:
+    ttl = JWT_EXPIRY_SECONDS
+    if max_age_seconds is not None:
+        ttl = max(0, min(JWT_EXPIRY_SECONDS, int(max_age_seconds)))
     payload = {
         "sub": student_id,
         "exam_id": exam_id,
         "session_id": session_id,
-        "exp": int(time.time()) + JWT_EXPIRY_SECONDS,
+        "exp": int(time.time()) + ttl,
     }
     return jwt.encode(payload, SECRET_SIGNING_KEY, algorithm=ALGORITHM)
 
