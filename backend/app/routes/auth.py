@@ -175,6 +175,40 @@ def logout_session(
     return {"success": True}
 
 
+@router.post("/refresh-token")
+def refresh_token(
+    active_session=Depends(verify_session_guard),
+    db: Session = Depends(get_db),
+):
+    """
+    AUD-053: the original JWT exp is fixed at login time from the exam's
+    scheduled duration. Time spent in PreExamCheck/Dashboard before the exam
+    opens, or an admin mid-exam duration extension (exam_time_synced socket
+    event), is never reflected in that fixed exp — so a still-legitimate,
+    still-running session's token can expire while the student is mid-exam.
+    Re-issues a token for the SAME session_id, recomputed from the exam's
+    CURRENT duration_seconds, so a periodic frontend refresh keeps a
+    genuinely active session alive without ever needing a fresh login.
+    Requires a currently-valid (not expired, not revoked) token — renewal,
+    not a bypass of expiry/revocation.
+    """
+    exam_record = db.query(Exam).filter(Exam.id == active_session.exam_id).first()
+    if not exam_record:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    EXAM_GRACE_SECONDS = 300
+    grace_deadline = exam_record.starts_at + exam_record.duration_seconds + EXAM_GRACE_SECONDS
+    grace_remaining = grace_deadline - time.time()
+    if grace_remaining <= 0:
+        raise HTTPException(status_code=401, detail="Exam credentials have expired.")
+
+    new_jwt = create_session_jwt(
+        active_session.student_id, active_session.exam_id, active_session.id,
+        max_age_seconds=grace_remaining,
+    )
+    return {"session_jwt": new_jwt}
+
+
 @router.put("/update-password")
 def update_password(
     payload: UpdatePasswordPayload,
