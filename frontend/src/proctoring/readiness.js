@@ -14,7 +14,18 @@
 import proctoringEngine from './engine';
 
 const POLL_INTERVAL_MS = 200;
-const DEFAULT_TIMEOUT_MS = 15000; // generous: camera permission prompt + model load can be slow on first run
+// AUD-043: model download (TFJS + COCO-SSD + MediaPipe WASM + face model
+// asset) is a one-time, real, multi-MB network fetch — its duration is
+// network-bound and NOT comparable to the camera/permission checks below,
+// which should resolve in a couple seconds once the user grants permission.
+// Bounding BOTH under one short timeout was the root cause of "Proctoring
+// models failed to load" firing on fast students who reached ExamWorkspace
+// before the (perfectly healthy, still-progressing) background download
+// finished — see readiness.js audit notes / chat history for full trace.
+// Model loading therefore gets its own effectively-unbounded wait stage; the
+// camera/loop stage keeps a short timeout since those genuinely are fast.
+const MODEL_WAIT_CEILING_MS = 90000; // backstop only — trips if the download is ACTUALLY broken, not just slow
+const CAMERA_LOOP_TIMEOUT_MS = 8000; // camera permission + first frame + first loop tick — should be fast
 const LOOP_ALIVE_MAX_AGE_MS = 1500; // lastTickAt must be more recent than this to count as "running"
 const LUMA_DARK_THRESHOLD = 15; // mirrors engine.js LUMA_DARK_THRESHOLD — kept in sync manually, both are small/stable
 
@@ -23,9 +34,8 @@ const REASONS = {
   BLACK:   'black',    // frames arriving but black (shutter/cover/lens cap)
   FACE:    'face',     // face detection model never produced a successful inference
   LOOP:    'loop',     // detection loop not ticking
-  MODELS:  'models',   // models did not finish loading
+  MODELS:  'models',   // models did not finish loading within the backstop ceiling — genuinely broken, not just slow
   PIPELINE:'pipeline', // violation callback not wired (enforcement mode only)
-  TIMEOUT: 'timeout',  // overall timeout before all checks passed
 };
 
 const REASON_MESSAGES = {
@@ -33,9 +43,8 @@ const REASON_MESSAGES = {
   [REASONS.BLACK]:    'No usable video signal — check that your camera is not covered, has a lens cap removed, or a shutter closed.',
   [REASONS.FACE]:     'Face detection could not initialize. Please ensure you are visible in the frame and try again.',
   [REASONS.LOOP]:     'Proctoring monitoring is not running. Please retry.',
-  [REASONS.MODELS]:   'Proctoring models failed to load. Please check your network connection and try again.',
+  [REASONS.MODELS]:   'Proctoring models could not be downloaded. Please check your network connection and try again.',
   [REASONS.PIPELINE]: 'Violation reporting could not be confirmed. Please retry.',
-  [REASONS.TIMEOUT]:  'Proctoring did not become ready in time. Please retry.',
 };
 
 function sleep(ms) {
@@ -59,18 +68,22 @@ function isLoopAlive() {
 
 /**
  * Strictly verifies every proctoring precondition before allowing the exam
- * to become usable. Calls engine.start('enforcement') (idempotent if already
- * running). Polls until ALL checks pass or timeout elapses.
+ * to become usable. No degraded mode — every check below is mandatory.
+ *
+ * Two independent stages:
+ *   1. MODEL WAIT (effectively unbounded, ceiling is a broken-download
+ *      backstop only) — reuses prepare()'s singleton promise, so this never
+ *      re-triggers a download; it just waits for whatever is already in
+ *      flight (which may have started as early as PreExamCheck/Dashboard
+ *      mount, well before this function was even called).
+ *   2. CAMERA/LOOP WAIT (short timeout) — only begins once models are
+ *      confirmed ready, since face-detection-confirmation depends on models.
  *
  * @param {object} opts
- * @param {number} [opts.timeoutMs]
+ * @param {(stage: 'models'|'camera') => void} [opts.onStageChange] — UI hook so the caller can show "preparing" vs "checking camera"
  * @returns {Promise<{ ok: boolean, reason?: string, message?: string, checks: object }>}
  */
-export async function verifyProctoringReady({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  // Caller (ExamWorkspace) must already have set proctoringEngine.onViolation
-  // before calling this — that's how useProctoring('enforcement') normally
-  // wires it. We just verify it's actually set, we don't set it ourselves,
-  // so this module has no opinion on transport/reporting details.
+export async function verifyProctoringReady({ onStageChange } = {}) {
   const pipelineOk = typeof proctoringEngine.onViolation === 'function';
   if (!pipelineOk) {
     return {
@@ -81,23 +94,39 @@ export async function verifyProctoringReady({ timeoutMs = DEFAULT_TIMEOUT_MS } =
     };
   }
 
-  // start() is idempotent (no-op if already running) and internally awaits
-  // prepare() once, then acquires camera and begins the loop. We don't await
-  // it here directly because under strict policy we want our own poll loop
-  // to observe granular failure reasons (camera vs black-frame vs loop),
-  // not just "did start() throw".
-  proctoringEngine.start('enforcement');
+  // ── STAGE 1: MODEL WAIT (unbounded, backstopped) ──────────────────────────
+  // prepare() is idempotent/singleton (see engine.js prepare() guard) — calling
+  // it here never starts a second download, it just gives us the same
+  // in-flight or already-resolved promise that may have been kicked off
+  // minutes earlier on PreExamCheck/Dashboard mount.
+  if (onStageChange) onStageChange('models');
+  if (!proctoringEngine.modelsReady) {
+    const modelWait = proctoringEngine.prepare();
+    await Promise.race([modelWait, sleep(MODEL_WAIT_CEILING_MS)]);
+  }
 
-  const deadline = Date.now() + timeoutMs;
+  if (!proctoringEngine.modelsReady) {
+    return {
+      ok: false,
+      reason: REASONS.MODELS,
+      message: REASON_MESSAGES[REASONS.MODELS],
+      checks: { models: false, pipeline: pipelineOk },
+    };
+  }
+
+  // ── STAGE 2: CAMERA / LOOP WAIT (short timeout — these should be fast) ───
+  if (onStageChange) onStageChange('camera');
+  proctoringEngine.start('enforcement'); // models already ready, so this resolves quickly (camera + loop only)
+
+  const deadline = Date.now() + CAMERA_LOOP_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const modelsOk = proctoringEngine.modelsReady;
     const cameraOk = isCameraHealthy();
     const blackOk  = cameraOk && isFrameNotBlack();
     const faceOk   = proctoringEngine.faceInferenceOk;
     const loopOk   = isLoopAlive();
 
-    if (modelsOk && cameraOk && blackOk && faceOk && loopOk) {
+    if (cameraOk && blackOk && faceOk && loopOk) {
       return {
         ok: true,
         checks: { models: true, camera: true, black: true, face: true, loop: true, pipeline: true },
@@ -107,11 +136,8 @@ export async function verifyProctoringReady({ timeoutMs = DEFAULT_TIMEOUT_MS } =
     await sleep(POLL_INTERVAL_MS);
   }
 
-  // Timed out — figure out the most relevant single reason to surface,
-  // checked in dependency order (camera blocks everything downstream, so
-  // report that first if it's the culprit).
   const finalChecks = {
-    models: proctoringEngine.modelsReady,
+    models: true, // confirmed in stage 1
     camera: isCameraHealthy(),
     black:  isCameraHealthy() && isFrameNotBlack(),
     face:   proctoringEngine.faceInferenceOk,
@@ -119,10 +145,9 @@ export async function verifyProctoringReady({ timeoutMs = DEFAULT_TIMEOUT_MS } =
     pipeline: pipelineOk,
   };
 
-  let reason = REASONS.TIMEOUT;
+  let reason = REASONS.CAMERA;
   if (!finalChecks.camera)      reason = REASONS.CAMERA;
   else if (!finalChecks.black)  reason = REASONS.BLACK;
-  else if (!finalChecks.models) reason = REASONS.MODELS;
   else if (!finalChecks.face)   reason = REASONS.FACE;
   else if (!finalChecks.loop)   reason = REASONS.LOOP;
 

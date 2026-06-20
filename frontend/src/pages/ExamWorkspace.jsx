@@ -139,21 +139,31 @@ export default function ExamWorkspace() {
   const [loading, setLoading] = useState(true);
 
   // ── PROCTORING READINESS GATE (INITIALIZING state) ─────────────────────────
-  // Strict policy: exam must not become usable until camera, black-frame
-  // check, face-detection init, the inference loop, and the violation
-  // pipeline are ALL confirmed healthy. No degraded mode. Separate from
-  // `loading` (which only means "exam data fetched") so a slow-but-healthy
+  // Strict policy: exam must not become usable until models, camera,
+  // black-frame check, face-detection init, the inference loop, and the
+  // violation pipeline are ALL confirmed healthy. No degraded mode. Separate
+  // from `loading` (which only means "exam data fetched") so a slow-but-healthy
   // network doesn't get confused with a camera/proctoring failure or vice versa.
-  const [proctorStatus, setProctorStatus] = useState('checking'); // 'checking' | 'ready' | 'failed'
+  //
+  // AUD-043: 'preparing-models' is its own status (distinct from 'checking')
+  // because model download has no meaningful short timeout — it's a one-time
+  // background fetch that may still be in flight from PreExamCheck/Dashboard.
+  // Students must see "please wait", not a failure, while it finishes.
+  const [proctorStatus, setProctorStatus] = useState('preparing-models'); // 'preparing-models' | 'checking' | 'ready' | 'failed'
   const [proctorFailReason, setProctorFailReason] = useState('');
   const [proctorRetryTick, setProctorRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setProctorStatus('checking');
+    setProctorStatus('preparing-models');
     setProctorFailReason('');
 
-    verifyProctoringReady().then((result) => {
+    verifyProctoringReady({
+      onStageChange: (stage) => {
+        if (cancelled) return;
+        setProctorStatus(stage === 'models' ? 'preparing-models' : 'checking');
+      },
+    }).then((result) => {
       if (cancelled) return;
       if (result.ok) {
         setProctorStatus('ready');
@@ -1134,10 +1144,21 @@ const renderSubjectiveSection = () => {
   // STRICT POLICY: exam content, sockets-driven timer display, and all
   // interactive elements stay blocked until proctoring is fully verified.
   // No degraded mode — any failed check blocks entry with a retry option.
+  // 'preparing-models' is a wait state, not a failure — students should never
+  // see a failure screen just because a one-time model download is still
+  // in progress (see AUD-043).
   if (proctorStatus !== 'ready') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white p-6">
-        {proctorStatus === 'checking' ? (
+        {proctorStatus === 'preparing-models' ? (
+          <>
+            <div className="w-12 h-12 rounded-full border-4 border-slate-700 border-t-blue-500 animate-spin mb-6" />
+            <h2 className="text-2xl font-black mb-2">Preparing Proctoring</h2>
+            <p className="text-slate-400 max-w-md text-center">
+              Downloading and initializing monitoring components. This may take a little longer on a first run or slower connection — please keep this tab open.
+            </p>
+          </>
+        ) : proctorStatus === 'checking' ? (
           <>
             <div className="w-12 h-12 rounded-full border-4 border-slate-700 border-t-blue-500 animate-spin mb-6" />
             <h2 className="text-2xl font-black mb-2">Verifying Proctoring</h2>
