@@ -13,6 +13,11 @@ class Student(Base):
     password   = Column(String, nullable=False)                  # bcrypt hash (master credential)
     is_active  = Column(Boolean, default=True)
     created_at = Column(Float, default=time.time)
+    # AUD-025: TRUE means `password` is a random unguessable placeholder
+    # (set by the legacy backfill), not a real credential. Any code path that
+    # propagates this hash into TokenRegistry.password_hash must check this
+    # flag first and skip instead of poisoning the exam login.
+    needs_password_reset = Column(Boolean, default=False)
 
 
 class TokenRegistry(Base):

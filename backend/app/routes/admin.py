@@ -795,6 +795,10 @@ class MasterStudentUpdatePayload(BaseModel):
     is_active: bool = True
 
 
+class MasterStudentsBulkPayload(BaseModel):
+    students: List[MasterStudentCreatePayload]
+
+
 @router.get("/master-students")
 def list_master_students(
     _: bool = Depends(verify_admin),
@@ -822,6 +826,7 @@ def list_master_students(
             "name":        s.name,
             "is_active":   s.is_active,
             "created_at":  s.created_at,
+            "needs_password_reset": getattr(s, "needs_password_reset", False),
             "enrollments": enrollment_map.get(s.id, []),  # [{exam_id, token}, ...]
         })
 
@@ -846,9 +851,57 @@ def create_master_student(
         password=hashed,
         is_active=payload.is_active,
         created_at=time.time(),
+        needs_password_reset=False,
     ))
     db.commit()
     return {"success": True, "id": payload.id}
+
+
+@router.post("/master-students/bulk")
+def bulk_create_master_students(
+    payload: MasterStudentsBulkPayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk upsert into Master Directory (CSV upload feeds this).
+    Mirrors the upsert pattern in create_students() (per-exam bulk, admin.py ~661),
+    but targets Student instead of TokenRegistry.
+    - New id -> insert with hashed password.
+    - Existing id -> update name/is_active, and password ONLY if a non-empty
+      value was supplied (so re-uploading a CSV without passwords doesn't
+      wipe existing real passwords back to blank).
+    Returns counts so the UI can show created/updated, matching assign_students_to_exam's shape.
+    """
+    created = 0
+    updated = 0
+
+    for s in payload.students:
+        existing = db.query(Student).filter(Student.id == s.id).first()
+        if existing:
+            if s.name is not None:
+                existing.name = s.name
+            existing.is_active = s.is_active
+            if s.password:
+                existing.password = bcrypt.hashpw(
+                    s.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+                ).decode("utf-8")
+                existing.needs_password_reset = False
+            updated += 1
+        else:
+            hashed = bcrypt.hashpw(s.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+            db.add(Student(
+                id=s.id,
+                name=s.name,
+                password=hashed,
+                is_active=s.is_active,
+                created_at=time.time(),
+                needs_password_reset=False,
+            ))
+            created += 1
+
+    db.commit()
+    return {"success": True, "created": created, "updated": updated}
 
 
 @router.put("/master-students/{student_id}")
@@ -870,9 +923,50 @@ def update_master_student(
         student.password = bcrypt.hashpw(
             payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
         ).decode("utf-8")
+        student.needs_password_reset = False
 
     db.commit()
     return {"success": True}
+
+
+class ResetAndResyncPayload(BaseModel):
+    password: str
+
+
+@router.post("/master-students/{student_id}/reset-and-resync")
+def reset_and_resync_student(
+    student_id: str,
+    payload: ResetAndResyncPayload,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    One-click fix for the 'placeholder hash poisoned my exam login' problem.
+    1. Sets a real password on the Master Directory record (same as PUT /master-students/{id}).
+    2. Immediately re-propagates that new hash into every TokenRegistry row for
+       this student, across all exams — so existing assignments don't need a
+       manual re-assign to pick up the fix.
+    """
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+    student.password = hashed
+    student.is_active = True
+    student.needs_password_reset = False
+
+    rows = db.query(TokenRegistry).filter(TokenRegistry.student_id == student_id).all()
+    for row in rows:
+        row.password_hash = hashed
+        row.is_active = True
+
+    db.commit()
+    return {
+        "success": True,
+        "id": student_id,
+        "resynced_tokens": len(rows),
+    }
 
 
 @router.delete("/master-students/{student_id}")
@@ -914,7 +1008,11 @@ def assign_students_to_exam(
     - Fetches master password from Student table.
     - Reuses existing upsert logic: updates if enrolled, inserts if new.
     - Skips students not found in Master Directory.
-    - Returns counts of created vs updated vs skipped.
+    - AUD-025: also skips students whose Master password is still an unset
+      placeholder (needs_password_reset=TRUE) — these get reported separately
+      as `needs_reset` instead of silently locking them out with a hash
+      nobody knows. Admin should use Reset & Resync for those first.
+    - Returns counts of created vs updated vs skipped vs needs_reset.
     """
     import secrets as secrets_mod
 
@@ -928,8 +1026,13 @@ def assign_students_to_exam(
 
     created = 0
     updated = 0
+    needs_reset = []
 
     for student in students:
+        if getattr(student, "needs_password_reset", False):
+            needs_reset.append(student.id)
+            continue
+
         existing = db.query(TokenRegistry).filter(
             TokenRegistry.student_id == student.id,
             TokenRegistry.exam_id == exam_id,
@@ -956,4 +1059,5 @@ def assign_students_to_exam(
         "created": created,
         "updated": updated,
         "skipped": skipped,
+        "needs_reset": needs_reset,
     }

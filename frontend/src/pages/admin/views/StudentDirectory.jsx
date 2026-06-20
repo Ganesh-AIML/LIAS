@@ -100,6 +100,13 @@ export default function StudentDirectory() {
   const [editForm, setEditForm] = useState({ name: '', password: '', is_active: true });
   const [editError, setEditError] = useState('');
 
+  // Reset & Resync (one-click fix for placeholder-hash lockout)
+  const [resyncingId, setResyncingId] = useState(null); // student.id currently mid-resync
+  const fileInputRef = React.useRef(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null); // {created, updated}
+  const [uploadError, setUploadError] = useState('');
+
   // Credential modal (click exam badge)
   const [credModal, setCredModal] = useState(null); // { enrollment, examTitle }
 
@@ -196,6 +203,89 @@ export default function StudentDirectory() {
     } catch (err) { alert(err.message); }
   };
 
+  // One-click fix: set a real password + push it into every TokenRegistry
+  // row for this student, in a single call. Fixes the "assigned before a
+  // real password existed" lockout without a manual re-assign step.
+  const handleResetAndResync = async (student) => {
+    const pwd = window.prompt(
+      `Set a new password for ${student.id}.\n\nThis will also resync the password into every exam this student is already assigned to, so they can log in immediately.`
+    );
+    if (!pwd) return;
+    setResyncingId(student.id);
+    try {
+      const res = await adminApi.post(`/admin/master-students/${encodeURIComponent(student.id)}/reset-and-resync`, { password: pwd });
+      if (res.success) {
+        alert(`Done — password reset and synced to ${res.resynced_tokens} exam token(s).`);
+        fetchData();
+      }
+    } catch (err) { alert(err.message); }
+    finally { setResyncingId(null); }
+  };
+
+  // ── BULK CSV UPLOAD ──────────────────────────────────────────────────────────
+  // Expected columns: id,name,password (header row required, name optional).
+  const parseStudentsCsv = (text) => {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return [];
+    const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const idIdx = header.indexOf('id');
+    const nameIdx = header.indexOf('name');
+    const pwIdx = header.indexOf('password');
+    if (idIdx === -1 || pwIdx === -1) {
+      throw new Error('CSV must have "id" and "password" columns (header row required).');
+    }
+    const startRow = 1; // skip header
+    const rows = [];
+    for (let i = startRow; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim());
+      const id = cols[idIdx];
+      const password = cols[pwIdx];
+      if (!id || !password) continue; // skip incomplete rows rather than failing the whole batch
+      rows.push({
+        id,
+        name: nameIdx !== -1 ? (cols[nameIdx] || null) : null,
+        password,
+        is_active: true,
+      });
+    }
+    return rows;
+  };
+
+  const handleCsvFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+
+    setUploadError('');
+    setUploadResult(null);
+
+    let students;
+    try {
+      const text = await file.text();
+      students = parseStudentsCsv(text);
+    } catch (err) {
+      setUploadError(err.message);
+      return;
+    }
+    if (students.length === 0) {
+      setUploadError('No valid rows found (need at least "id" and "password" per row).');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const res = await adminApi.post('/admin/master-students/bulk', { students });
+      if (res.success) {
+        setUploadResult({ created: res.created, updated: res.updated });
+        fetchData();
+      }
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // ── RENDER ────────────────────────────────────────────────────────────────────
 
   return (
@@ -213,6 +303,21 @@ export default function StudentDirectory() {
         </div>
         {activeTab === 'directory' && (
           <div className="flex flex-wrap items-center gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleCsvFileSelected}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-wait"
+              title="CSV columns: id, name (optional), password"
+            >
+              <Plus size={15} className="rotate-45" /> {isUploading ? 'Uploading...' : 'Upload CSV'}
+            </button>
             <button
               onClick={() => { setAddForm({ id: '', name: '', password: '' }); setAddError(''); setShowAddModal(true); }}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
@@ -222,6 +327,19 @@ export default function StudentDirectory() {
           </div>
         )}
       </div>
+
+      {/* CSV UPLOAD RESULT / ERROR */}
+      {uploadResult && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm font-bold text-emerald-700 flex items-center gap-2">
+          <CheckCircle size={15} />
+          CSV processed — {uploadResult.created} new · {uploadResult.updated} updated
+        </div>
+      )}
+      {uploadError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm font-bold text-red-600 flex items-center gap-2">
+          <AlertCircle size={15} /> {uploadError}
+        </div>
+      )}
 
       {/* TABLE CARD */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
@@ -366,12 +484,32 @@ export default function StudentDirectory() {
                         {s.is_active
                           ? <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md font-bold uppercase border border-emerald-200">Active</span>
                           : <span className="text-[10px] bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-bold uppercase border border-red-200">Suspended</span>}
+                        {s.needs_password_reset && (
+                          <div className="mt-1">
+                            <span
+                              className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md font-bold uppercase border border-amber-200"
+                              title="Backfilled with a placeholder password — student can't log in until reset."
+                            >
+                              Needs Reset
+                            </span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Actions */}
                       <td className="px-6 py-4 text-right">
                         {!isBulkMode && (
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {s.needs_password_reset && (
+                              <button
+                                onClick={() => handleResetAndResync(s)}
+                                disabled={resyncingId === s.id}
+                                className="p-1.5 text-amber-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-wait"
+                                title="Reset password & resync to all assigned exams"
+                              >
+                                <RefreshCw size={15} className={resyncingId === s.id ? 'animate-spin' : ''} />
+                              </button>
+                            )}
                             <button
                               onClick={() => { setEditForm({ name: s.name || '', password: '', is_active: s.is_active }); setEditError(''); setEditingStudent(s); }}
                               className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -737,10 +875,17 @@ function TestCredentialsTab({ masterStudents, exams, onRefresh }) {
 
         {/* Result banner */}
         {assignResult && (
-          <div className="mx-6 mt-3 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm font-bold text-emerald-700 flex items-center gap-2">
-            <CheckCircle size={15} />
-            Done — {assignResult.created} new · {assignResult.updated} updated
-            {assignResult.skipped?.length > 0 && ` · ${assignResult.skipped.length} skipped`}
+          <div className="mx-6 mt-3 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm font-bold text-emerald-700 flex flex-col gap-1">
+            <span className="flex items-center gap-2">
+              <CheckCircle size={15} />
+              Done — {assignResult.created} new · {assignResult.updated} updated
+              {assignResult.skipped?.length > 0 && ` · ${assignResult.skipped.length} skipped`}
+            </span>
+            {assignResult.needs_reset?.length > 0 && (
+              <span className="text-amber-700 font-bold">
+                {assignResult.needs_reset.length} student(s) skipped — password never set (see "Needs Reset" in Master Directory).
+              </span>
+            )}
           </div>
         )}
 

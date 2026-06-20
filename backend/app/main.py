@@ -104,12 +104,25 @@ def _run_additive_migrations():
             db.rollback()
             logger.warning("students table migration skipped: %s", e)
 
+        # AUD-025: flag students whose `password` is a placeholder hash, not a
+        # real credential, so assign_students_to_exam can refuse to propagate
+        # it into TokenRegistry instead of silently locking students out.
+        try:
+            db.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS needs_password_reset BOOLEAN DEFAULT FALSE;"))
+            db.commit()
+            logger.info("✅ students.needs_password_reset ready.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("needs_password_reset migration skipped: %s", e)
+
         # ── BACKFILL: seed students from existing TokenRegistry unique student_ids ──
         # Only inserts rows that don't already exist.
         # AUD-024: empty string is not a valid bcrypt hash and breaks downstream
         # password comparisons (e.g. assign_students_to_exam). Use a placeholder
         # bcrypt hash of a random, unguessable value instead — login still requires
         # an explicit password reset via the Master Directory UI.
+        # AUD-025: mark these rows needs_password_reset=TRUE so downstream code
+        # (assign_students_to_exam) knows not to trust this hash as a real password.
         try:
             import bcrypt as _bcrypt
             import secrets as _secrets
@@ -117,13 +130,14 @@ def _run_additive_migrations():
                 _secrets.token_urlsafe(32).encode("utf-8"), _bcrypt.gensalt()
             ).decode("utf-8")
             db.execute(text("""
-                INSERT INTO students (id, name, password, is_active, created_at)
+                INSERT INTO students (id, name, password, is_active, created_at, needs_password_reset)
                 SELECT DISTINCT
                     tr.student_id,
                     NULL,
                     :placeholder_hash,
                     TRUE,
-                    EXTRACT(EPOCH FROM NOW())
+                    EXTRACT(EPOCH FROM NOW()),
+                    TRUE
                 FROM token_registry tr
                 WHERE tr.student_id IS NOT NULL
                   AND tr.student_id <> ''
@@ -136,6 +150,16 @@ def _run_additive_migrations():
         except Exception as e:
             db.rollback()
             logger.warning("students backfill skipped: %s", e)
+
+        # AUD-025: one-time sweep for students backfilled BEFORE this flag existed
+        # (e.g. if AUD-024 already ran on this DB in a prior deploy). Anyone who
+        # was never given a real password via the UI still has a placeholder hash
+        # but needs_password_reset would default to FALSE on their existing row.
+        # We can't distinguish "real password" from "placeholder" after the fact
+        # for those rows, so we leave them as-is — this only protects rows
+        # inserted from now on. Admins with pre-existing locked-out students
+        # should use Reset & Resync, which clears the flag explicitly anyway.
+
 
 _run_additive_migrations()
 # ──────────────────────────────────────────────────────────
