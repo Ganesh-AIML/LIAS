@@ -46,12 +46,15 @@ class ProctoringEngine {
     this.modelsLoading = null;
     this.running = false;
     this.rafId = null;
+    this._startPromise = null; // in-flight start() guard — see AUD-042
     this.frameTick = 0;
+    this.lastTickAt = 0; // set every _loop() tick — readiness.js uses this to confirm the loop is actually alive, not just started
     this.lastObjectScan = 0;
     this.lastLumaCheck = 0;
     this.darkStreak = 0;
     this.lumaCanvas = null;
     this.cooldown = {};
+    this.faceInferenceOk = false; // set true the first time detectForVideo() runs without throwing — readiness.js requires this under strict policy
     this.onViolation = null; // (eventType, detail) => void, only called in 'enforcement'
     this.onLocalFlag = null; // (eventType, detail) => void, called in observation+enforcement
   }
@@ -88,13 +91,34 @@ class ProctoringEngine {
 
   // OBSERVATION / ENFORCEMENT — acquire own camera stream, start detection loop.
   // mode: 'observation' | 'enforcement'
-  async start(mode) {
+  start(mode) {
     this.mode = mode;
-    if (this.running) return; // loop already active, mode switch above is enough
+    if (this.running) return Promise.resolve(); // loop already active, mode switch above is enough
 
+    // AUD-042: `running` is only set true after getUserMedia resolves, so two
+    // near-simultaneous callers (e.g. useProctoring's mount effect and a
+    // readiness check both calling start() in the same tick) could otherwise
+    // both pass the `running` guard and acquire two separate camera streams.
+    // Cache the in-flight attempt so concurrent callers share one acquisition.
+    if (this._startPromise) return this._startPromise;
+    this._startPromise = this._doStart().finally(() => {
+      this._startPromise = null;
+    });
+    return this._startPromise;
+  }
+
+  async _doStart() {
     try {
+      // AUD-041: model load (GPU delegate / CDN scripts) can fail permanently in
+      // some environments. prepare()'s internal .catch() swallows that error so
+      // this await always resolves — but modelsReady can legitimately stay false.
+      // Previously a `return` here meant camera was NEVER acquired in that case,
+      // silently disabling ALL proctoring (including track-ended/luma checks,
+      // which don't need any model) for the rest of the session. Camera
+      // acquisition must not depend on model load success — _loop() already
+      // guards faceLandmarker/cocoModel individually per-frame, so partial
+      // protection (track-ended + luma black-frame) still works with no models.
       if (!this.modelsReady) await this.prepare();
-      if (!this.modelsReady) return; // models unavailable — fail open per failure policy
 
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: 'user' },
@@ -131,6 +155,7 @@ class ProctoringEngine {
   _loop(now) {
     if (!this.running) return;
     this.frameTick++;
+    this.lastTickAt = Date.now();
 
     // Unplug case: track ends outright — definitive, no sampling needed.
     const track = this.stream?.getVideoTracks?.()[0];
@@ -157,6 +182,7 @@ class ProctoringEngine {
     if (this.faceLandmarker && this.frameTick % FACE_FRAME_SKIP === 0) {
       try {
         const result = this.faceLandmarker.detectForVideo(this.video, now);
+        this.faceInferenceOk = true; // inference ran without throwing — confirms model+camera+loop are wired correctly together
         if (result.facialTransformationMatrixes?.length) {
           const m = result.facialTransformationMatrixes[0].data;
           const sy = Math.sqrt(m[0] * m[0] + m[4] * m[4]);
@@ -240,6 +266,8 @@ class ProctoringEngine {
     this.video = null;
     this.cooldown = {};
     this.darkStreak = 0;
+    this.faceInferenceOk = false;
+    this.lastTickAt = 0;
   }
 }
 

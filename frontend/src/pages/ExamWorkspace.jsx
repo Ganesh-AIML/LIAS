@@ -19,6 +19,7 @@ import remarkGfm from "remark-gfm";
 
 import api, { violationApi } from "../services/api";
 import { useProctoring } from "../proctoring/useProctoring";
+import { verifyProctoringReady } from "../proctoring/readiness";
 import { useAuthStore } from "../store/authStore";
 import { useTrueTime } from "../hooks/useTrueTime";
 const SubjectiveEditor = lazy(
@@ -136,6 +137,37 @@ export default function ExamWorkspace() {
   const [examData, setExamData] = useState(null);
   const [activeSection, setActiveSection] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // ── PROCTORING READINESS GATE (INITIALIZING state) ─────────────────────────
+  // Strict policy: exam must not become usable until camera, black-frame
+  // check, face-detection init, the inference loop, and the violation
+  // pipeline are ALL confirmed healthy. No degraded mode. Separate from
+  // `loading` (which only means "exam data fetched") so a slow-but-healthy
+  // network doesn't get confused with a camera/proctoring failure or vice versa.
+  const [proctorStatus, setProctorStatus] = useState('checking'); // 'checking' | 'ready' | 'failed'
+  const [proctorFailReason, setProctorFailReason] = useState('');
+  const [proctorRetryTick, setProctorRetryTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProctorStatus('checking');
+    setProctorFailReason('');
+
+    verifyProctoringReady().then((result) => {
+      if (cancelled) return;
+      if (result.ok) {
+        setProctorStatus('ready');
+      } else {
+        setProctorStatus('failed');
+        setProctorFailReason(result.message || 'Proctoring could not be verified.');
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [proctorRetryTick]);
+
+  const retryProctorCheck = () => setProctorRetryTick((n) => n + 1);
+  // ── END PROCTORING READINESS GATE ───────────────────────────────────────────
 
   const { ts, isSynced } = useTrueTime();
   const [isTimeUp, setIsTimeUp] = useState(false);
@@ -1098,6 +1130,39 @@ const renderSubjectiveSection = () => {
         Initializing Workspace...
       </div>
     );
+
+  // STRICT POLICY: exam content, sockets-driven timer display, and all
+  // interactive elements stay blocked until proctoring is fully verified.
+  // No degraded mode — any failed check blocks entry with a retry option.
+  if (proctorStatus !== 'ready') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white p-6">
+        {proctorStatus === 'checking' ? (
+          <>
+            <div className="w-12 h-12 rounded-full border-4 border-slate-700 border-t-blue-500 animate-spin mb-6" />
+            <h2 className="text-2xl font-black mb-2">Verifying Proctoring</h2>
+            <p className="text-slate-400 max-w-md text-center">
+              Checking camera, face detection, and monitoring before your exam can begin. This usually takes a few seconds.
+            </p>
+          </>
+        ) : (
+          <>
+            <Monitor size={64} className="text-rose-500 mb-6" />
+            <h2 className="text-2xl font-black mb-2">Proctoring Could Not Be Verified</h2>
+            <p className="text-slate-400 mb-8 max-w-md text-center">
+              {proctorFailReason || 'Proctoring is required to begin this exam.'}
+            </p>
+            <button
+              onClick={retryProctorCheck}
+              className="bg-blue-900 hover:bg-blue-800 text-white font-bold py-4 px-8 rounded-xl shadow-lg transition-all"
+            >
+              Retry
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-slate-50 font-sans overflow-hidden">
