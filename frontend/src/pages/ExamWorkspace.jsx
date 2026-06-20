@@ -508,6 +508,11 @@ export default function ExamWorkspace() {
         }
       } catch (error) {
         console.error(error);
+        if (error.response?.status === 403 && error.response?.data?.detail === "Exam already submitted.") {
+          setToastMessage("You have already submitted this exam.");
+          navigate("/dashboard");
+          return;
+        }
         setToastMessage("Failed to connect to exam core.");
       } finally {
         setLoading(false);

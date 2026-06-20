@@ -30,7 +30,14 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if ([401, 403].includes(error.response?.status)) {
+    const status = error.response?.status;
+    const detail = error.response?.data?.detail;
+    // AUD-034 FIX: "Exam already submitted" is a legitimate-session business
+    // rule, not an auth failure. Let the calling page handle it (friendly
+    // message + redirect to dashboard) instead of wiping the JWT and
+    // bouncing to /join.
+    const isAlreadySubmitted = status === 403 && detail === 'Exam already submitted.';
+    if ([401, 403].includes(status) && !isAlreadySubmitted) {
       useAuthStore.getState().clearSession();
       // Redirect to student login, not admin
       window.location.href = '/join';
