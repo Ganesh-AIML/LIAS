@@ -24,6 +24,27 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 router = APIRouter()
 logger = logging.getLogger("scope")
 
+
+# AUD-035: A student can have multiple ExamSession rows for the same exam —
+# the original submitted one (now revoked by a later re-login) and a fresh
+# empty one from the re-login itself. Admin views must report the student's
+# real submitted attempt, not whichever row happens to be non-revoked.
+def dedupe_sessions_per_student(sessions):
+    """Given a list of ExamSession rows (any exam_id mix), return one row
+    per (student_id, exam_id): the submitted one if any exists, else the
+    most recently created."""
+    best = {}
+    for s in sessions:
+        key = (s.student_id, s.exam_id)
+        current = best.get(key)
+        if current is None:
+            best[key] = s
+        elif s.is_submitted and not current.is_submitted:
+            best[key] = s
+        elif s.is_submitted == current.is_submitted and s.created_at > current.created_at:
+            best[key] = s
+    return list(best.values())
+
 # ── AUTH GUARD ─────────────────────────────────────────────────────────────────
 def verify_admin(x_admin_token: str = Header(None)):
     import secrets
@@ -360,13 +381,14 @@ def get_exam_analytics(
 
     session_query = (
         db.query(ExamSession)
-        .filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False)
+        .filter(ExamSession.exam_id == exam_id)
         .order_by(ExamSession.created_at.asc())
     )
-    total_students = session_query.count()
+    all_sessions = session_query.all()
+    sessions = dedupe_sessions_per_student(all_sessions)
+    total_students = len(sessions)
     if limit is not None:
-        session_query = session_query.offset(offset).limit(limit)
-    sessions = session_query.all()
+        sessions = sessions[offset:offset + limit]
 
     # Map questions for O(1) grading lookups
     q_map = {q.id: q for q in questions}
@@ -528,7 +550,8 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
 @router.get("/exams/{exam_id}/monitor")
 def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
-    sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id, ExamSession.is_revoked == False).all()
+    all_sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id).all()
+    sessions = dedupe_sessions_per_student(all_sessions)
     
     session_ids = [s.id for s in sessions]
     violation_counts = {}
@@ -611,19 +634,14 @@ def list_students(
     # Bulk fetch sessions
     session_query = db.query(ExamSession).filter(
         ExamSession.student_id.in_(student_ids),
-        ExamSession.is_revoked == False
     )
     if exam_id:
         # AUD-016: scope to the filtered exam instead of loading every
         # session across all exams for these students.
         session_query = session_query.filter(ExamSession.exam_id == exam_id)
-    sessions = session_query.order_by(ExamSession.created_at.desc()).all()
-    
-    session_map = {}
-    for s in sessions:
-        key = (s.student_id, s.exam_id)
-        if key not in session_map:
-            session_map[key] = s
+    sessions = dedupe_sessions_per_student(session_query.all())
+
+    session_map = {(s.student_id, s.exam_id): s for s in sessions}
 
     result = []
     for r in records:
@@ -695,7 +713,9 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
 
     exams = db.query(Exam).all()
     now = time.time()
-    active_sessions = db.query(ExamSession.exam_id, ExamSession.is_submitted).filter(ExamSession.is_revoked == False).all()
+    active_sessions = dedupe_sessions_per_student(
+        db.query(ExamSession).all()
+    )
     
     counts_map = {}
     for session in active_sessions:
