@@ -215,6 +215,10 @@ def load_exam_workspace(
     """
     # AUD-003 FIX: Ownership guard — student can only load their own exam
     if active_session.exam_id != exam_id:
+        logger.error(
+            "[403 DEBUG] reason=ownership_mismatch session_id=%s student_id=%s jwt_exam_id=%s url_exam_id=%s",
+            active_session.id, active_session.student_id, active_session.exam_id, exam_id,
+        )
         raise HTTPException(status_code=403, detail="Access denied.")
 
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
@@ -223,6 +227,10 @@ def load_exam_workspace(
 
     # AUD-028 FIX: Block access if exam has not started yet
     if exam_record.starts_at > time.time():
+        logger.error(
+            "[403 DEBUG] reason=exam_not_started session_id=%s student_id=%s starts_at=%s now=%s",
+            active_session.id, active_session.student_id, exam_record.starts_at, time.time(),
+        )
         raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     # Block re-entry after submission
@@ -236,6 +244,10 @@ def load_exam_workspace(
         .first()
     )
     if existing_submission:
+        logger.error(
+            "[403 DEBUG] reason=already_submitted session_id=%s student_id=%s submitted_session_id=%s",
+            active_session.id, active_session.student_id, existing_submission.id,
+        )
         raise HTTPException(status_code=403, detail="Exam already submitted.")
 
     # 1. Fetch dynamic questions and coding tasks attached to this test ID
@@ -372,6 +384,10 @@ def verify_exam_password(
 ):
     # AUD-006 FIX: Ownership guard — student can only verify password for their own exam
     if active_session.exam_id != exam_id:
+        logger.error(
+            "[403 DEBUG] reason=ownership_mismatch session_id=%s student_id=%s jwt_exam_id=%s url_exam_id=%s",
+            active_session.id, active_session.student_id, active_session.exam_id, exam_id,
+        )
         raise HTTPException(status_code=403, detail="Access denied.")
 
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
@@ -380,6 +396,10 @@ def verify_exam_password(
 
     # AUD-028 FIX: Also block password verify for exams not yet started
     if exam_record.starts_at > time.time():
+        logger.error(
+            "[403 DEBUG] reason=exam_not_started session_id=%s student_id=%s starts_at=%s now=%s",
+            active_session.id, active_session.student_id, exam_record.starts_at, time.time(),
+        )
         raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     target_hash = (
@@ -419,7 +439,11 @@ def submit_exam(
     """
     # H-08: Prevent cross-exam injection
     if active_session.exam_id != exam_id:
-        raise HTTPException(status_code=403, detail="Session token does not match target exam.")
+        logger.error(
+            "[403 DEBUG] reason=ownership_mismatch session_id=%s student_id=%s jwt_exam_id=%s url_exam_id=%s",
+            active_session.id, active_session.student_id, active_session.exam_id, exam_id,
+        )
+        raise HTTPException(status_code=403, detail="Access denied.")
 
     # AUD-030 FIX: Reject submissions after exam end + grace period
     exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
@@ -472,6 +496,10 @@ def run_code(
     """
     # Ownership guard
     if active_session.exam_id != exam_id:
+        logger.error(
+            "[403 DEBUG] reason=ownership_mismatch session_id=%s student_id=%s jwt_exam_id=%s url_exam_id=%s",
+            active_session.id, active_session.student_id, active_session.exam_id, exam_id,
+        )
         raise HTTPException(status_code=403, detail="Access denied.")
 
     logger.info(
@@ -505,6 +533,10 @@ def submit_code(
     """
     # Ownership guard
     if active_session.exam_id != exam_id:
+        logger.error(
+            "[403 DEBUG] reason=ownership_mismatch session_id=%s student_id=%s jwt_exam_id=%s url_exam_id=%s",
+            active_session.id, active_session.student_id, active_session.exam_id, exam_id,
+        )
         raise HTTPException(status_code=403, detail="Access denied.")
 
     logger.info(
