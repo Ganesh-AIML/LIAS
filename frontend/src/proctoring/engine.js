@@ -28,6 +28,14 @@ function loadScript(src) {
   scriptPromises[src] = new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = src;
+    // AUD-051 ROOT CAUSE: dynamically-created <script> elements default to
+    // async=true, so execution order is whichever script's network fetch
+    // finishes first — NOT document/insertion order. coco-ssd.min.js is far
+    // smaller than tf.min.js, so on a typical connection it finishes
+    // downloading first and executes before TFJS exists, throwing
+    // "Cannot find TensorFlow.js" (the exact prod error). async=false forces
+    // in-order execution while still fetching non-blockingly.
+    s.async = false;
     s.onload = resolve;
     s.onerror = reject;
     document.head.appendChild(s);
