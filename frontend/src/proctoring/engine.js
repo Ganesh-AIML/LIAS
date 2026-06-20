@@ -22,6 +22,23 @@ const LUMA_CHECK_MS        = 2000; // reuse object-scan cadence, avoid extra CPU
 const LUMA_DARK_THRESHOLD  = 15;   // mean 0-255 brightness; near-pure-black frame
 const LUMA_DARK_STREAK_REQ = 2;    // consecutive dark checks before flagging (~4s)
 
+// AUD-052 ROOT CAUSE (fail-open inference catch): the previous detectForVideo /
+// cocoModel.detect() catch blocks swallowed EVERY exception identically,
+// whether transient (one bad frame) or fatal (lost WebGL/GPU context, model
+// corrupted, OOM on a modest exam-hall PC over an hour-long exam). A fatal
+// failure left the model permanently broken for the rest of the exam, with
+// the RAF loop still ticking (lastTickAt kept updating) and faceInferenceOk
+// stuck true forever (only set once, never reset on failure) — so every
+// downstream health signal looked perfectly healthy while detection was
+// completely dead. That is the actual cause of "no face_absent / no
+// multi_person for the rest of the exam, no LED change, no error visible
+// anywhere." Fix: count consecutive failures per model and fail CLOSED
+// (raise an explicit violation + mark the model as degraded so it can
+// self-heal) once a real streak is observed, instead of failing silently
+// open forever after the first unlucky frame.
+const FACE_FAIL_STREAK_THRESHOLD = 10; // ~ a few seconds at FACE_FRAME_SKIP cadence
+const COCO_FAIL_STREAK_THRESHOLD = 4;  // ~ a few scan cycles (OBJECT_SCAN_MS apart)
+
 let scriptPromises = {};
 function loadScript(src) {
   if (scriptPromises[src]) return scriptPromises[src];
@@ -63,6 +80,10 @@ class ProctoringEngine {
     this.lumaCanvas = null;
     this.cooldown = {};
     this.faceInferenceOk = false; // set true the first time detectForVideo() runs without throwing — readiness.js requires this under strict policy
+    this.faceFailStreak = 0;   // consecutive detectForVideo() exceptions — AUD-052
+    this.cocoFailStreak = 0;   // consecutive cocoModel.detect() rejections — AUD-052
+    this.faceDegraded = false; // true once face pipeline is treated as fatally broken, not just glitchy
+    this.cocoDegraded = false; // true once object-detection pipeline is treated as fatally broken
     this.onViolation = null; // (eventType, detail) => void, only called in 'enforcement'
     this.onLocalFlag = null; // (eventType, detail) => void, called in observation+enforcement
   }
@@ -191,6 +212,8 @@ class ProctoringEngine {
       try {
         const result = this.faceLandmarker.detectForVideo(this.video, now);
         this.faceInferenceOk = true; // inference ran without throwing — confirms model+camera+loop are wired correctly together
+        this.faceFailStreak = 0;
+        this.faceDegraded = false;
         if (result.facialTransformationMatrixes?.length) {
           const m = result.facialTransformationMatrixes[0].data;
           const sy = Math.sqrt(m[0] * m[0] + m[4] * m[4]);
@@ -203,12 +226,31 @@ class ProctoringEngine {
         } else {
           this._flag('face_absent', 'Face not detected — absent or covered');
         }
-      } catch { /* skip frame on transient inference error */ }
+      } catch (err) {
+        // AUD-052: do not silently absorb this. A single bad frame is normal
+        // (compressed frame mid-decode, transient WASM hiccup) — only escalate
+        // once it's a real streak, so we don't fire on a one-off glitch.
+        this.faceFailStreak++;
+        if (this.faceFailStreak >= FACE_FAIL_STREAK_THRESHOLD) {
+          this.faceInferenceOk = false; // health no longer reflects reality unless we flip this off
+          if (!this.faceDegraded) {
+            this.faceDegraded = true;
+            console.warn('[proctoring] face pipeline degraded, attempting self-heal', err);
+            this._healFacePipeline();
+          }
+          // Fail CLOSED, not open: if we can no longer verify the student is
+          // present, that is treated the same as them being absent — never
+          // disappear into a no-op.
+          this._flag('face_absent', 'Face detection pipeline degraded — unable to verify presence');
+        }
+      }
     }
 
     if (this.cocoModel && Date.now() - this.lastObjectScan > OBJECT_SCAN_MS) {
       this.lastObjectScan = Date.now();
       this.cocoModel.detect(this.video).then((predictions) => {
+        this.cocoFailStreak = 0;
+        this.cocoDegraded = false;
         let personCount = 0;
         let flagged = [];
         for (const p of predictions) {
@@ -217,10 +259,51 @@ class ProctoringEngine {
         }
         if (personCount > 1) this._flag('multi_person', `Multiple persons detected (${personCount})`);
         if (flagged.length) this._flag('object_detected', `Prohibited objects: ${[...new Set(flagged)].join(', ')}`);
-      }).catch(() => {});
+      }).catch((err) => {
+        // AUD-052: same fail-closed treatment as face detection — a permanently
+        // broken object-detection pipeline must surface, not vanish.
+        this.cocoFailStreak++;
+        if (this.cocoFailStreak >= COCO_FAIL_STREAK_THRESHOLD && !this.cocoDegraded) {
+          this.cocoDegraded = true;
+          console.warn('[proctoring] object-detection pipeline degraded', err);
+          this._flag('proctor_engine_degraded', 'Object detection pipeline failed repeatedly — monitoring degraded');
+        }
+      });
     }
 
     this.rafId = requestAnimationFrame((t) => this._loop(t));
+  }
+
+  // AUD-052 self-heal: a degraded face pipeline is most likely a lost GPU/WebGL
+  // context (common on modest exam-hall hardware under sustained load), not a
+  // dead camera. Re-creating just the FaceLandmarker — never touching the
+  // camera stream or RAF loop — is the targeted, minimal recovery. Falls back
+  // to the CPU delegate, which is slower but far more resilient, so a machine
+  // that already lost its GPU context once doesn't keep re-losing it.
+  async _healFacePipeline() {
+    try {
+      const visionMod = await import(/* @vite-ignore */ VISION_URL);
+      const { FilesetResolver, FaceLandmarker } = visionMod;
+      const filesetResolver = await FilesetResolver.forVisionTasks(WASM_BASE);
+      const next = await FaceLandmarker.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: 'CPU', // downgrade from GPU — see comment above
+        },
+        outputFacialTransformationMatrixes: true,
+        numFaces: 1,
+        runningMode: 'VIDEO',
+      });
+      const old = this.faceLandmarker;
+      this.faceLandmarker = next;
+      this.faceFailStreak = 0;
+      old?.close?.();
+      console.warn('[proctoring] face pipeline self-healed on CPU delegate');
+    } catch (err) {
+      // Self-heal failed — stay degraded. proctor_engine_degraded / face_absent
+      // flags already cover this; do not retry in a tight loop.
+      console.warn('[proctoring] face pipeline self-heal failed', err);
+    }
   }
 
   // Cheap mean-brightness sample via a tiny downscaled offscreen canvas —
@@ -275,6 +358,10 @@ class ProctoringEngine {
     this.cooldown = {};
     this.darkStreak = 0;
     this.faceInferenceOk = false;
+    this.faceFailStreak = 0;
+    this.cocoFailStreak = 0;
+    this.faceDegraded = false;
+    this.cocoDegraded = false;
     this.lastTickAt = 0;
   }
 }

@@ -20,6 +20,7 @@ ALLOWED_EVENTS = {
     "tab_switch", "fullscreen_exit", "copy_paste", "devtools",
     "face_absent", "multi_person", "right_click", "keyboard_shortcut",
     "object_detected", "proctor_head_pose",
+    "proctor_engine_degraded",  # AUD-052: raised when detection pipeline fails closed instead of silently
 }
 
 # Grace period (seconds) after exam end before late submissions are rejected
