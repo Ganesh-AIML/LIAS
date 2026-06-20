@@ -12,6 +12,16 @@ const OBJECT_SCAN_MS    = 2000;
 const COOLDOWN_MS       = 8000; // higher than ProctorAI default — avoid flooding /exam/violation
 const FACE_FRAME_SKIP   = 2;    // run face inference every Nth RAF tick (perf, esp. on Workspace)
 
+// AUD-036: physical shutter/lens-cap closure keeps the MediaStreamTrack
+// 'live' and the video element happily playing — it just delivers black
+// frames. FaceLandmarker can silently no-op or error on a degenerate
+// all-black frame (swallowed by the existing inference catch), so
+// face_absent never fires. Cheap periodic luminance sampling closes that
+// gap and reports through the exact same face_absent path.
+const LUMA_CHECK_MS        = 2000; // reuse object-scan cadence, avoid extra CPU load
+const LUMA_DARK_THRESHOLD  = 15;   // mean 0-255 brightness; near-pure-black frame
+const LUMA_DARK_STREAK_REQ = 2;    // consecutive dark checks before flagging (~4s)
+
 let scriptPromises = {};
 function loadScript(src) {
   if (scriptPromises[src]) return scriptPromises[src];
@@ -38,6 +48,9 @@ class ProctoringEngine {
     this.rafId = null;
     this.frameTick = 0;
     this.lastObjectScan = 0;
+    this.lastLumaCheck = 0;
+    this.darkStreak = 0;
+    this.lumaCanvas = null;
     this.cooldown = {};
     this.onViolation = null; // (eventType, detail) => void, only called in 'enforcement'
     this.onLocalFlag = null; // (eventType, detail) => void, called in observation+enforcement
@@ -100,6 +113,8 @@ class ProctoringEngine {
       this.running = true;
       this.frameTick = 0;
       this.lastObjectScan = 0;
+      this.lastLumaCheck = 0;
+      this.darkStreak = 0;
       this.rafId = requestAnimationFrame((t) => this._loop(t));
     } catch (err) {
       // Camera/model failure must not block Dashboard or (per policy) abort Enforcement —
@@ -116,6 +131,28 @@ class ProctoringEngine {
   _loop(now) {
     if (!this.running) return;
     this.frameTick++;
+
+    // Unplug case: track ends outright — definitive, no sampling needed.
+    const track = this.stream?.getVideoTracks?.()[0];
+    if (track && track.readyState === 'ended') {
+      this._flag('face_absent', 'Camera disconnected during exam');
+    }
+
+    // Shutter/lens-cap case: track stays 'live' but frames are black.
+    if (now - this.lastLumaCheck > LUMA_CHECK_MS) {
+      this.lastLumaCheck = now;
+      const luma = this._sampleLuminance();
+      if (luma !== null) {
+        if (luma < LUMA_DARK_THRESHOLD) {
+          this.darkStreak++;
+          if (this.darkStreak >= LUMA_DARK_STREAK_REQ) {
+            this._flag('face_absent', 'Camera obstructed — no light detected (shutter closed or lens covered)');
+          }
+        } else {
+          this.darkStreak = 0;
+        }
+      }
+    }
 
     if (this.faceLandmarker && this.frameTick % FACE_FRAME_SKIP === 0) {
       try {
@@ -152,6 +189,31 @@ class ProctoringEngine {
     this.rafId = requestAnimationFrame((t) => this._loop(t));
   }
 
+  // Cheap mean-brightness sample via a tiny downscaled offscreen canvas —
+  // 16x12 px keeps this well under sub-millisecond cost, run only every
+  // LUMA_CHECK_MS, not per-frame.
+  _sampleLuminance() {
+    if (!this.video || this.video.readyState < 2) return null;
+    try {
+      if (!this.lumaCanvas) {
+        this.lumaCanvas = document.createElement('canvas');
+        this.lumaCanvas.width = 16;
+        this.lumaCanvas.height = 12;
+      }
+      const ctx = this.lumaCanvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(this.video, 0, 0, 16, 12);
+      const { data } = ctx.getImageData(0, 0, 16, 12);
+      let sum = 0;
+      const pixelCount = data.length / 4;
+      for (let i = 0; i < data.length; i += 4) {
+        sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      }
+      return sum / pixelCount;
+    } catch {
+      return null; // transient canvas/codec error — skip this check, don't flag
+    }
+  }
+
   _flag(eventType, detail) {
     const now = Date.now();
     if (this.cooldown[eventType] && now - this.cooldown[eventType] < COOLDOWN_MS) return;
@@ -177,6 +239,7 @@ class ProctoringEngine {
     }
     this.video = null;
     this.cooldown = {};
+    this.darkStreak = 0;
   }
 }
 
