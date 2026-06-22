@@ -16,6 +16,15 @@ from app.limiter import limiter
 router = APIRouter()
 logger = logging.getLogger("scope")
 
+# ── SESSION STATUS (used by lock screen to detect admin GRANT) ─────────────────
+@router.get("/session-status")
+def get_session_status(
+    active_session = Depends(verify_session_guard),
+):
+    """Lightweight endpoint the lock screen polls to detect admin GRANT (unlock).
+    verify_session_guard returns 401 if revoked, so a 200 response means session is valid."""
+    return {"success": True, "is_revoked": False, "is_submitted": active_session.is_submitted}
+
 ALLOWED_EVENTS = {
     "tab_switch", "fullscreen_exit", "copy_paste", "devtools",
     "face_absent", "multi_person", "right_click", "keyboard_shortcut",
@@ -356,6 +365,9 @@ def load_exam_workspace(
             "title":          exam_record.title,
             "date":           exam_record.starts_at * 1000,
             "duration":       exam_record.duration_seconds // 60,
+            "codingDuration": exam_record.coding_duration_minutes,
+            "mcqDuration":    exam_record.mcq_duration_minutes,
+            "qnaDuration":    exam_record.qna_duration_minutes,
             "maxViolations":  3,
             "codingProblems": formatted_coding,
             "sections":       formatted_sections,

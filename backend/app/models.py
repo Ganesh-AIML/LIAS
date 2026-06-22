@@ -45,7 +45,9 @@ class Exam(Base):
     status              = Column(String, default="upcoming") # draft, upcoming, live, completed
     start_secret = Column(String, nullable=True)
     end_secret   = Column(String, nullable=True)
-    coding_duration_minutes = Column(Integer, default=60)  # AUD-022: was hardcoded to 60
+    coding_duration_minutes = Column(Integer, default=None)  # None = no section timer
+    mcq_duration_minutes    = Column(Integer, default=None)  # None = no section timer
+    qna_duration_minutes    = Column(Integer, default=None)  # None = no section timer
 
     # Relationships - If Exam is deleted, delete all associated content
     questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")

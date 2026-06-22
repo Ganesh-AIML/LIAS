@@ -61,52 +61,74 @@ const SUPPORTED_LANGUAGES = [
   },
 ];
 
+// Task 3: Section-wise timer component
+// Shows the active section's remaining time (if set) or total remaining time.
+// Calls onSectionExpired(sectionKey) when a section timer runs out.
+// Calls onTimeUp(true) when total duration expires.
 const SmartTimer = ({
   examData,
   ts,
   isSynced,
   onTimeUp,
-  isCodingActive,
-  mcqStartTime,
+  activeSection,
+  onSectionExpired,
+  sectionStartTimes,  // { mcq: ms, coding: ms, qna: ms } — when each section was entered
 }) => {
   const [timeLeft, setTimeLeft] = useState(null);
+  const [label, setLabel]       = useState('');
+  const firedRef = useRef({});   // prevent firing onSectionExpired multiple times
 
   useEffect(() => {
     if (!examData || !examData.duration || !isSynced || !ts) return;
 
-    const startMs = new Date(examData.date || Date.now()).getTime();
-    const globalEndTimeMs = startMs + parseInt(examData.duration) * 60000;
+    const startMs       = new Date(examData.date || Date.now()).getTime();
+    const globalEndMs   = startMs + parseInt(examData.duration) * 60000;
 
     const tick = () => {
       const now = ts.now();
-      let targetEndTimeMs;
 
-      if (isCodingActive) {
-        const codingMaxMins = examData.codingDuration || examData.duration;
-        targetEndTimeMs = startMs + parseInt(codingMaxMins) * 60000;
-      } else {
-        const mcqAllottedMins =
-          parseInt(examData.duration) -
-          (parseInt(examData.codingDuration) || 0);
-        const effectiveMcqStart =
-          mcqStartTime ||
-          startMs + parseInt(examData.codingDuration || 0) * 60000;
-        const strictMcqEndTime = effectiveMcqStart + mcqAllottedMins * 60000;
-        targetEndTimeMs = Math.min(strictMcqEndTime, globalEndTimeMs);
-      }
-
-      const remaining = Math.max(0, Math.floor((targetEndTimeMs - now) / 1000));
-      setTimeLeft(remaining);
-
-      if (globalEndTimeMs - now <= 0) {
+      // Global hard cutoff
+      if (now >= globalEndMs) {
+        setTimeLeft(0);
         clearInterval(timer);
         onTimeUp(true);
+        return;
+      }
+
+      // Section-level timer
+      const sectionDurationMap = {
+        technical: examData.mcqDuration    ? parseInt(examData.mcqDuration)    * 60000 : null,
+        coding:    examData.codingDuration  ? parseInt(examData.codingDuration) * 60000 : null,
+        subjective:examData.qnaDuration    ? parseInt(examData.qnaDuration)    * 60000 : null,
+      };
+
+      const sectionDurMs = sectionDurationMap[activeSection];
+      const sectionStart = sectionStartTimes?.[activeSection] || startMs;
+
+      if (sectionDurMs !== null && sectionDurMs !== undefined) {
+        const sectionEnd = sectionStart + sectionDurMs;
+        const sectionLeft = Math.max(0, Math.floor((Math.min(sectionEnd, globalEndMs) - now) / 1000));
+        setTimeLeft(sectionLeft);
+        const lbl = activeSection === 'technical' ? 'MCQ' : activeSection === 'coding' ? 'Coding' : 'Q&A';
+        setLabel(`${lbl} Time`);
+
+        if (sectionLeft <= 0 && !firedRef.current[activeSection]) {
+          firedRef.current[activeSection] = true;
+          onSectionExpired && onSectionExpired(activeSection);
+        }
+      } else {
+        // No section timer — show global remaining
+        const totalLeft = Math.max(0, Math.floor((globalEndMs - now) / 1000));
+        setTimeLeft(totalLeft);
+        setLabel('Remaining');
       }
     };
 
+    firedRef.current = {}; // reset on section change
     const timer = setInterval(tick, 1000);
+    tick();
     return () => clearInterval(timer);
-  }, [examData, isSynced, ts, onTimeUp, isCodingActive, mcqStartTime]);
+  }, [examData, isSynced, ts, onTimeUp, activeSection, sectionStartTimes, onSectionExpired]);
 
   if (timeLeft === null) return <span className="text-slate-400 font-bold tracking-widest">Syncing...</span>;
 
@@ -124,10 +146,70 @@ const SmartTimer = ({
       }
       style={urgency === "critical" ? { animation: "pulse 1s ease-in-out infinite" } : undefined}
     >
-      {m}:{s < 10 ? "0" : ""}{s}{urgency === "critical" ? " ⚠" : " Remaining"}
+      {m}:{s < 10 ? "0" : ""}{s} {label}{urgency === "critical" ? " ⚠" : ""}
     </span>
   );
 };
+
+// Task 8/10: Lock overlay component — polls backend every 5s to detect admin GRANT.
+// When backend returns 200 (session no longer revoked), calls onUnlocked().
+function LockOverlay({ examId, answers, subjectiveAnswers, navigate, onUnlocked }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      try {
+        await api.get('/exam/session-status');
+        // 200 = session valid (admin granted) — unlock
+        clearInterval(poll);
+        onUnlocked();
+      } catch {
+        // 401 = still revoked; keep polling
+      }
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [onUnlocked]);
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      await api.post(`/exam/${examId}/submit`, {
+        answers, autoSubmit: true,
+        subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
+      });
+    } catch { /* best effort */ }
+    ["answers","codes","active_lang","active_source","subjective"].forEach((key) =>
+      sessionStorage.removeItem(`scope_${key}_${examId}`)
+    );
+    navigate("/dashboard");
+  };
+
+  return (
+    <div className="fixed inset-0 z-[250] bg-slate-900/95 flex flex-col items-center justify-center text-white p-6">
+      <Lock size={64} className="text-red-500 mb-6" />
+      <h2 className="text-2xl font-black mb-2">Exam Locked</h2>
+      <p className="text-slate-400 mb-2 max-w-md text-center">
+        Maximum violations reached. Your screen has been locked.
+      </p>
+      <p className="text-slate-500 mb-8 text-sm max-w-md text-center">
+        Waiting for administrator to unlock your session…
+      </p>
+      <div className="flex gap-3">
+        <div className="flex items-center gap-2 text-slate-500 text-sm">
+          <span className="w-2 h-2 rounded-full bg-slate-500 animate-pulse inline-block" />
+          Checking for unlock…
+        </div>
+      </div>
+      <button
+        onClick={handleSubmit}
+        disabled={isSubmitting}
+        className="mt-6 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50"
+      >
+        {isSubmitting ? 'Submitting…' : 'Submit Exam & Exit'}
+      </button>
+    </div>
+  );
+}
 
 export default function ExamWorkspace() {
   useProctoring('enforcement'); // violations now reported + counted
@@ -219,6 +301,9 @@ export default function ExamWorkspace() {
   const [showLockModal, setShowLockModal] = useState(false);
   const [isCodingLocked, setIsCodingLocked] = useState(false);
   const [mcqStartTime, setMcqStartTime] = useState(null);
+  // Task 3: track when each section was entered + which are locked
+  const [sectionStartTimes, setSectionStartTimes] = useState({});
+  const [lockedSections, setLockedSections] = useState({});
   const [needsFullscreen, setNeedsFullscreen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -235,6 +320,7 @@ export default function ExamWorkspace() {
 
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationModal, setShowViolationModal] = useState(false);
+  const [lastViolationType, setLastViolationType] = useState('');
   const MAX_VIOLATIONS = examData?.maxViolations ?? 3;
 
   const syncViolationCount = async () => {
@@ -431,6 +517,7 @@ export default function ExamWorkspace() {
 
     const triggerViolation = (event_type, detail = "") => {
       logViolation(event_type, detail);
+      setLastViolationType(event_type);
       syncViolationCount().then((serverCount) => {
         if (serverCount === null) setViolationCount((prev) => prev + 1);
         setShowViolationModal(true);
@@ -531,22 +618,32 @@ export default function ExamWorkspace() {
     const loadWorkspace = async () => {
       try {
         const response = await api.get(`/exam/${examId}`);
-        setExamData(response.data.data || response.data);
+        const data = response.data.data || response.data;
+        setExamData(data);
 
-        const hasCod = (response.data.data?.codingProblems || []).length > 0;
-        const hasSubj =
-          (response.data.data?.subjectiveQuestions || []).length > 0;
+        const hasCod  = (data?.codingProblems || []).length > 0;
+        const hasSubj = (data?.subjectiveQuestions || []).length > 0;
+        const hasMcq  = (data?.sections || []).some(s => (s.questions || []).length > 0);
 
-        if (hasCod) {
+        // Task 2 & 3: set initial section (MCQ → Coding → QnA) and record start time
+        const initialSection = hasMcq ? 'technical' : hasCod ? 'coding' : hasSubj ? 'subjective' : null;
+        if (initialSection) {
+          setSectionStartTimes({ [initialSection]: Date.now() });
+        }
+
+        if (hasMcq) {
+          // MCQ first — coding not yet unlocked
+          setIsCodingLocked(false);
+          setActiveSection("technical");
+        } else if (hasCod) {
+          // No MCQ — coding is first section, start unlocked
+          setIsCodingLocked(false);
           setActiveSection("coding");
           if (sourceCode === "// Loading code...")
             setSourceCode(SUPPORTED_LANGUAGES[1].defaultCode);
         } else if (hasSubj) {
           setIsCodingLocked(true);
           setActiveSection("subjective");
-        } else {
-          setIsCodingLocked(true);
-          setActiveSection("technical");
         }
       } catch (error) {
         console.error(error);
@@ -579,15 +676,48 @@ export default function ExamWorkspace() {
   };
 
   const handleSelectOption = (questionId, optionLetter) => {
+    if (lockedSections['technical']) return; // MCQ section locked — ignore input
     setAnswers((prev) => ({ ...prev, [questionId]: optionLetter }));
   };
+
+  // Task 3: record when a section starts
+  const recordSectionStart = (section) => {
+    setSectionStartTimes(prev => ({ ...prev, [section]: Date.now() }));
+  };
+
+  // Task 3: advance to next available section after current expires
+  const handleSectionExpired = useCallback((expiredSection) => {
+    const hasCod  = (examData?.codingProblems || []).length > 0;
+    const hasSubj = (examData?.subjectiveQuestions || []).length > 0;
+    const hasMcq  = (examData?.sections || []).some(s => (s.questions || []).length > 0);
+
+    setLockedSections(prev => ({ ...prev, [expiredSection]: true }));
+    setToastMessage(`⏰ ${expiredSection === 'technical' ? 'MCQ' : expiredSection === 'coding' ? 'Coding' : 'Q&A'} time expired. Moving to next section.`);
+
+    // Section order: MCQs → Coding → QnA. When a section expires, move to the NEXT in sequence.
+    if (expiredSection === 'technical') {
+      // MCQ expired → go to Coding if present, else QnA
+      if (hasCod) { setActiveSection('coding'); recordSectionStart('coding'); }
+      else if (hasSubj) { setActiveSection('subjective'); recordSectionStart('subjective'); }
+    } else if (expiredSection === 'coding') {
+      // Coding expired → lock coding, go to QnA if present
+      setIsCodingLocked(true);
+      if (hasSubj) { setActiveSection('subjective'); recordSectionStart('subjective'); }
+    } else if (expiredSection === 'subjective') {
+      // QnA expired — last section, nothing to advance to
+    }
+  }, [examData, lockedSections]);
 
   const executeCodingLock = async () => {
     setShowLockModal(false);
     setIsCodingLocked(true);
     const nowMs = ts.now();
     setMcqStartTime(nowMs);
-    setActiveSection("technical");
+    setLockedSections(prev => ({ ...prev, coding: true }));
+
+    const hasSubj = (examData?.subjectiveQuestions || []).length > 0;
+    // After coding, move to QnA if present (MCQ comes before coding in sequence)
+    if (hasSubj) { setActiveSection("subjective"); recordSectionStart('subjective'); }
   };
 
   const handleLanguageChange = (newLangId) => {
@@ -599,6 +729,7 @@ export default function ExamWorkspace() {
   };
 
   const handleRunCode = async () => {
+    if (isCodingLocked || lockedSections['coding']) return; // coding section locked
     setConsoleOutput("Executing on S.C.O.P.E. Servers...\n");
     try {
       const response = await api.post(`/exam/${examId}/run`, {
@@ -622,6 +753,7 @@ export default function ExamWorkspace() {
   };
 
   const handleSubmitCode = async () => {
+    if (isCodingLocked || lockedSections['coding']) return; // coding section locked
     setConsoleOutput("Evaluating against ALL test cases...\n");
     try {
       const response = await api.post(`/exam/${examId}/submit-code`, {
@@ -678,7 +810,12 @@ export default function ExamWorkspace() {
       navigate("/dashboard");
     } catch (err) {
       console.error(err);
-      setEndPasswordError("Submission failed. Network Error.");
+      const detail = err.response?.data?.detail;
+      if (err.response?.status === 403 && detail) {
+        setEndPasswordError(detail); // "Incorrect End Password." from backend
+      } else {
+        setEndPasswordError("Submission failed. Please try again.");
+      }
       setIsSubmitting(false);
     }
   };
@@ -886,7 +1023,7 @@ const renderSubjectiveSection = () => {
               questionText={q.text}
               onChange={(md) => handleSubjectiveChange(q.id, md)}
               initialValue={subjectiveAnswers[q.id] || ''}
-              disabled={isTimeUp || isSubmitting}
+              disabled={isTimeUp || isSubmitting || !!lockedSections['subjective']}
             />
           </Suspense>
         </div>
@@ -933,13 +1070,15 @@ const renderSubjectiveSection = () => {
             <div className="flex gap-3">
               <button
                 onClick={handleRunCode}
-                className="bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors"
+                disabled={isCodingLocked || !!lockedSections['coding']}
+                className="bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Code size={16} /> Run Code
               </button>
               <button
                 onClick={handleSubmitCode}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors"
+                disabled={isCodingLocked || !!lockedSections['coding']}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <CheckCircle size={16} /> Submit Code
               </button>
@@ -964,12 +1103,13 @@ const renderSubjectiveSection = () => {
                 language={currentMonacoLang}
                 value={sourceCode}
                 onChange={(value) => {
-                  setSourceCode(value);
+                  if (!isCodingLocked && !lockedSections['coding']) setSourceCode(value);
                 }}
                 options={{
                   fontSize: 14,
                   minimap: { enabled: false },
                   quickSuggestions: false,
+                  readOnly: isCodingLocked || !!lockedSections['coding'],
                 }}
               />
             </Suspense>
@@ -1191,74 +1331,109 @@ const renderSubjectiveSection = () => {
       {showViolationModal && (
         <div className="fixed inset-0 z-[300] bg-black/80 flex items-center justify-center p-6">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full text-center overflow-hidden border border-slate-200">
-            <div className={`px-8 pt-8 pb-6 ${violationCount >= MAX_VIOLATIONS ? "border-b-4 border-red-600" : "border-b-4 border-orange-500"}`}>
-              <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${violationCount >= MAX_VIOLATIONS ? "bg-red-50 border-2 border-red-200" : "bg-orange-50 border-2 border-orange-200"}`}>
-                <AlertTriangle size={32} className={violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-orange-500"} />
-              </div>
-              <h2 className={`text-2xl font-black mb-2 ${violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-slate-900"}`}>
-                {violationCount >= MAX_VIOLATIONS ? "Exam Terminated" : "Proctoring Violation"}
-              </h2>
-              <p className="text-slate-600 font-medium text-sm">
-                {violationCount >= MAX_VIOLATIONS
-                  ? "You have exceeded the maximum allowed violations."
-                  : "A prohibited action was detected and recorded by the system."}
-              </p>
-            </div>
-            <div className="px-8 py-5">
-              <div className="mb-3">
-                <div className="flex justify-between text-xs font-bold text-slate-500 mb-1.5">
-                  <span>Violations</span>
-                  <span className={violationCount >= MAX_VIOLATIONS ? "text-red-600" : "text-orange-600"}>{violationCount} / {MAX_VIOLATIONS}</span>
+            {violationCount >= MAX_VIOLATIONS ? (
+              /* ── TASK 8: LOCK SCREEN ── */
+              <>
+                <div className="px-8 pt-8 pb-6 border-b-4 border-red-600">
+                  <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center bg-red-50 border-2 border-red-200">
+                    <Lock size={32} className="text-red-600" />
+                  </div>
+                  <h2 className="text-2xl font-black mb-2 text-red-600">Maximum Violations Reached</h2>
+                  <p className="text-slate-600 font-medium text-sm">
+                    Your screen has been locked.<br/>It can only be unlocked by an administrator.
+                  </p>
                 </div>
-                <div className="w-full bg-slate-100 rounded-full h-2">
-                  <div
-                    className={`h-2 rounded-full transition-all ${violationCount >= MAX_VIOLATIONS ? "bg-red-600" : "bg-orange-500"}`}
-                    style={{ width: `${Math.min(100, (violationCount / MAX_VIOLATIONS) * 100)}%` }}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-slate-500 mb-5">
-                {violationCount >= MAX_VIOLATIONS
-                  ? "Your session has been flagged and terminated."
-                  : `${MAX_VIOLATIONS - violationCount} chance(s) remaining before your session is flagged.`}
-              </p>
-              <button
-                onClick={() => {
-                  if (violationCount >= MAX_VIOLATIONS) {
-                    api
-                      .post(`/exam/${examId}/submit`, {
-                        answers,
-                        autoSubmit: true,
+                <div className="px-8 py-6 space-y-3">
+                  <button
+                    onClick={() => {
+                      /* Wait for admin — remain locked, close modal to show lock overlay */
+                      setShowViolationModal(false);
+                    }}
+                    className="w-full font-bold py-3 rounded-xl transition-colors bg-slate-100 hover:bg-slate-200 text-slate-700"
+                  >
+                    Wait for Administrator
+                  </button>
+                  <button
+                    onClick={() => {
+                      api.post(`/exam/${examId}/submit`, {
+                        answers, autoSubmit: true,
                         subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
                       })
                       .then(() => {
-                        [
-                          "answers",
-                          "codes",
-                          "active_lang",
-                          "active_source",
-                          "subjective",
-                        ].forEach((key) =>
-                          sessionStorage.removeItem(`scope_${key}_${examId}`),
+                        ["answers","codes","active_lang","active_source","subjective"].forEach((key) =>
+                          sessionStorage.removeItem(`scope_${key}_${examId}`)
                         );
                         navigate("/dashboard");
                       })
                       .catch(() => navigate("/dashboard"));
-                    return;
-                  }
-
-                  setShowViolationModal(false);
-                  if (!document.fullscreenElement) {
-                    document.documentElement.requestFullscreen().catch(() => {});
-                  }
-                }}
-                className={`w-full font-bold py-3 rounded-xl transition-colors ${violationCount >= MAX_VIOLATIONS ? "bg-red-600 hover:bg-red-700 text-white" : "bg-slate-900 hover:bg-slate-800 text-white"}`}
-              >
-                {violationCount >= MAX_VIOLATIONS ? "Exit to Dashboard" : "I Understand — Return to Exam"}
-              </button>
-            </div>
+                    }}
+                    className="w-full font-bold py-3 rounded-xl transition-colors bg-red-600 hover:bg-red-700 text-white"
+                  >
+                    Submit Exam & Exit
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ── TASK 7: VIOLATION ALERT ── */
+              <>
+                <div className="px-8 pt-8 pb-6 border-b-4 border-orange-500">
+                  <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center bg-orange-50 border-2 border-orange-200">
+                    <AlertTriangle size={32} className="text-orange-500" />
+                  </div>
+                  <h2 className="text-2xl font-black mb-1 text-slate-900">Violation Detected</h2>
+                  <p className="text-sm font-bold text-orange-600 bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-lg inline-block mt-1">
+                    {lastViolationType
+                      ? lastViolationType.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase())
+                      : 'Prohibited Action'}
+                  </p>
+                </div>
+                <div className="px-8 py-5">
+                  <div className="mb-4 bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <div className="flex justify-between text-sm font-bold mb-2">
+                      <span className="text-slate-600">Violations</span>
+                      <span className="text-orange-600">{violationCount} / {MAX_VIOLATIONS}</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 mb-3">
+                      <div
+                        className="h-2 rounded-full bg-orange-500 transition-all"
+                        style={{ width: `${Math.min(100, (violationCount / MAX_VIOLATIONS) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Remaining chances: <span className="font-black text-slate-700">{MAX_VIOLATIONS - violationCount}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowViolationModal(false);
+                      if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen().catch(() => {});
+                      }
+                    }}
+                    className="w-full font-bold py-3 rounded-xl transition-colors bg-slate-900 hover:bg-slate-800 text-white"
+                  >
+                    I Understand — Return to Exam
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
+      )}
+
+      {/* TASK 8: LOCK OVERLAY — blocks exam when max violations reached and student chose to wait */}
+      {violationCount >= MAX_VIOLATIONS && !showViolationModal && (
+        <LockOverlay
+          examId={examId}
+          answers={answers}
+          subjectiveAnswers={subjectiveAnswers}
+          navigate={navigate}
+          onUnlocked={() => {
+            // Admin granted — reset violation count display so lock disappears
+            setViolationCount(0);
+            setToastMessage('✅ Your session has been unlocked by the administrator.');
+          }}
+        />
       )}
 
       {/* 🚨 THE FULLSCREEN ENFORCER OVERLAY */}
@@ -1307,8 +1482,9 @@ const renderSubjectiveSection = () => {
                 ts={ts}
                 isSynced={isSynced}
                 onTimeUp={setIsTimeUp}
-                isCodingActive={activeSection === "coding"}
-                mcqStartTime={mcqStartTime}
+                activeSection={activeSection}
+                onSectionExpired={handleSectionExpired}
+                sectionStartTimes={sectionStartTimes}
               />
             </p>
           </div>
@@ -1328,49 +1504,76 @@ const renderSubjectiveSection = () => {
 
       <div className="bg-white border-b border-slate-200 flex px-6 flex-shrink-0 z-10 justify-between items-center">
         <div className="flex">
-          <button
-            onClick={() => !isCodingLocked && setActiveSection("coding")}
-            className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
-              activeSection === "coding"
-                ? "border-blue-900 text-blue-900"
-                : isCodingLocked
-                  ? "border-transparent text-slate-300 cursor-not-allowed"
-                  : "border-transparent text-slate-500"
-            }`}
-          >
-            <Code size={18} /> Coding Challenge
-            {isCodingLocked && (
-              <CheckCircle size={14} className="text-emerald-500 ml-1" />
-            )}
-          </button>
-
-          <button
-            onClick={() => isCodingLocked && setActiveSection("technical")}
-            disabled={!isCodingLocked}
-            className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
-              activeSection === "technical"
-                ? "border-blue-900 text-blue-900"
-                : !isCodingLocked
-                  ? "border-transparent text-slate-300 cursor-not-allowed opacity-50"
-                  : "border-transparent text-slate-500"
-            }`}
-          >
-            <FileText size={18} /> MCQs
-            {!isCodingLocked && <Lock size={14} className="ml-1" />}
-          </button>
-
+          {/* Task 2: Only show MCQ tab if MCQ questions exist */}
+          {(examData?.sections || []).some(s => (s.questions || []).length > 0) && (
             <button
-  onClick={() => setActiveSection('subjective')}
-  disabled={examData?.subjectiveQuestions?.length === 0}
-  className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
-    activeSection === 'subjective' ? 'border-blue-900 text-blue-900' :
-    !examData?.subjectiveQuestions?.length ? 'border-transparent text-slate-300 cursor-not-allowed opacity-50' :
-    'border-transparent text-slate-500'
-  }`}
->
-  <FileText size={18} /> Theory / Subjective
-</button>
+              onClick={() => {
+                if (!lockedSections['technical']) {
+                  if (!sectionStartTimes['technical']) recordSectionStart('technical');
+                  setActiveSection("technical");
+                }
+              }}
+              disabled={!!lockedSections['technical']}
+              className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
+                activeSection === "technical"
+                  ? "border-blue-900 text-blue-900"
+                  : lockedSections['technical']
+                    ? "border-transparent text-slate-300 cursor-not-allowed opacity-50"
+                    : "border-transparent text-slate-500"
+              }`}
+            >
+              <FileText size={18} /> MCQs
+              {lockedSections['technical'] && <Lock size={14} className="text-red-400 ml-1" />}
+            </button>
+          )}
 
+          {/* Task 2: Only show Coding tab if coding problems exist */}
+          {(examData?.codingProblems || []).length > 0 && (
+            <button
+              onClick={() => {
+                if (!isCodingLocked && !lockedSections['coding']) {
+                  if (!sectionStartTimes['coding']) recordSectionStart('coding');
+                  setActiveSection("coding");
+                }
+              }}
+              disabled={isCodingLocked || !!lockedSections['coding']}
+              className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
+                activeSection === "coding"
+                  ? "border-blue-900 text-blue-900"
+                  : isCodingLocked || lockedSections['coding']
+                    ? "border-transparent text-slate-300 cursor-not-allowed"
+                    : "border-transparent text-slate-500"
+              }`}
+            >
+              <Code size={18} /> Coding Challenge
+              {(isCodingLocked || lockedSections['coding']) && (
+                <CheckCircle size={14} className="text-emerald-500 ml-1" />
+              )}
+            </button>
+          )}
+
+          {/* Task 2: Only show QnA tab if subjective questions exist */}
+          {(examData?.subjectiveQuestions || []).length > 0 && (
+            <button
+              onClick={() => {
+                if (!lockedSections['subjective']) {
+                  if (!sectionStartTimes['subjective']) recordSectionStart('subjective');
+                  setActiveSection('subjective');
+                }
+              }}
+              disabled={!!lockedSections['subjective']}
+              className={`flex items-center gap-2 px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${
+                activeSection === 'subjective'
+                  ? 'border-blue-900 text-blue-900'
+                  : lockedSections['subjective']
+                    ? 'border-transparent text-slate-300 cursor-not-allowed opacity-50'
+                    : 'border-transparent text-slate-500'
+              }`}
+            >
+              <FileText size={18} /> Theory / Subjective
+              {lockedSections['subjective'] && <Lock size={14} className="text-red-400 ml-1" />}
+            </button>
+          )}
         </div>
 
         {activeSection === "coding" && !isCodingLocked && (

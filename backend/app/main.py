@@ -81,7 +81,9 @@ def _run_additive_migrations():
 
         try:
             # AUD-022: coding_duration_minutes was hardcoded to 60 server-side
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS coding_duration_minutes INTEGER DEFAULT 60;"))
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS coding_duration_minutes INTEGER DEFAULT NULL;"))
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS mcq_duration_minutes INTEGER DEFAULT NULL;"))
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS qna_duration_minutes INTEGER DEFAULT NULL;"))
             db.commit()
         except Exception as e:
             db.rollback()

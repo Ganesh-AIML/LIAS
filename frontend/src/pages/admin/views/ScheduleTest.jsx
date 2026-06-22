@@ -90,7 +90,9 @@ export default function ScheduleTest({ initialData, onBack }) {
       ? formatTimeForInput(initialData.starts_at_ms)
       : "",
     duration_minutes: initialData?.duration_minutes || "120",
-    coding_duration_minutes: initialData?.coding_duration_minutes || "60",
+    mcq_duration_minutes: initialData?.mcq_duration_minutes || "",
+    coding_duration_minutes: initialData?.coding_duration_minutes || "",
+    qna_duration_minutes: initialData?.qna_duration_minutes || "",
     start_password: initialData?.start_password_hash || "",
     end_password: initialData?.end_password_hash || "",
   });
@@ -191,7 +193,9 @@ export default function ScheduleTest({ initialData, onBack }) {
       const payload = {
         ...testMeta,
         duration_minutes: parseInt(testMeta.duration_minutes),
-        coding_duration_minutes: parseInt(testMeta.coding_duration_minutes) || 60,
+        mcq_duration_minutes: testMeta.mcq_duration_minutes ? parseInt(testMeta.mcq_duration_minutes) : null,
+        coding_duration_minutes: testMeta.coding_duration_minutes ? parseInt(testMeta.coding_duration_minutes) : null,
+        qna_duration_minutes: testMeta.qna_duration_minutes ? parseInt(testMeta.qna_duration_minutes) : null,
         starts_at: new Date(testMeta.starts_at).getTime(),
         status: status,
         questions: questions,
@@ -284,7 +288,7 @@ export default function ScheduleTest({ initialData, onBack }) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Duration (Minutes) *</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Total Duration (Minutes) *</label>
                 <input
                   type="number"
                   min="1"
@@ -294,12 +298,35 @@ export default function ScheduleTest({ initialData, onBack }) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Coding Duration (Minutes)</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">MCQ Duration (Minutes) <span className="text-slate-300 normal-case font-medium">optional</span></label>
                 <input
                   type="number"
                   min="1"
+                  placeholder="No limit"
+                  value={testMeta.mcq_duration_minutes}
+                  onChange={(e) => setTestMeta({ ...testMeta, mcq_duration_minutes: e.target.value })}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Coding Duration (Minutes) <span className="text-slate-300 normal-case font-medium">optional</span></label>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="No limit"
                   value={testMeta.coding_duration_minutes}
                   onChange={(e) => setTestMeta({ ...testMeta, coding_duration_minutes: e.target.value })}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">QnA Duration (Minutes) <span className="text-slate-300 normal-case font-medium">optional</span></label>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="No limit"
+                  value={testMeta.qna_duration_minutes}
+                  onChange={(e) => setTestMeta({ ...testMeta, qna_duration_minutes: e.target.value })}
                   className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold"
                 />
               </div>

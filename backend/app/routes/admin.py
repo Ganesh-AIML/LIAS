@@ -120,7 +120,9 @@ class SubjectiveQuestionPayload(BaseModel):
 class ExamCreatePayload(BaseModel):
     title:               str
     duration_minutes:    int
-    coding_duration_minutes: Optional[int] = 60  # AUD-022: configurable, was hardcoded
+    coding_duration_minutes: Optional[int] = None  # None = no section timer
+    mcq_duration_minutes:    Optional[int] = None  # None = no section timer
+    qna_duration_minutes:    Optional[int] = None  # None = no section timer
     starts_at:           float          # Unix timestamp (ms from frontend → divide by 1000)
     start_password:      str
     end_password:        Optional[str]  = None
@@ -167,7 +169,9 @@ def create_exam(
             starts_at=payload.starts_at / 1000.0, status=payload.status,
             start_password_hash=start_hash, end_password_hash=end_hash,
             start_secret=enc_start, end_secret=enc_end,
-            coding_duration_minutes=payload.coding_duration_minutes or 60
+            coding_duration_minutes=payload.coding_duration_minutes or None,
+            mcq_duration_minutes=payload.mcq_duration_minutes or None,
+            qna_duration_minutes=payload.qna_duration_minutes or None,
         )
         db.add(new_exam)
 
@@ -275,7 +279,9 @@ def update_exam(
         # 1. Update Meta
         exam.title = payload.title
         exam.duration_seconds = payload.duration_minutes * 60
-        exam.coding_duration_minutes = payload.coding_duration_minutes or 60
+        exam.coding_duration_minutes = payload.coding_duration_minutes or None
+        exam.mcq_duration_minutes = payload.mcq_duration_minutes or None
+        exam.qna_duration_minutes = payload.qna_duration_minutes or None
         exam.starts_at = payload.starts_at / 1000.0
         exam.status = payload.status
 
@@ -540,7 +546,9 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
         "id": exam.id,
         "title": exam.title,
         "duration_minutes": exam.duration_seconds // 60,
-        "coding_duration_minutes": exam.coding_duration_minutes or 60,
+        "coding_duration_minutes": exam.coding_duration_minutes,
+        "mcq_duration_minutes": exam.mcq_duration_minutes,
+        "qna_duration_minutes": exam.qna_duration_minutes,
         "sections": [{"id": s.id, "name": s.name, "type": s.type, "marks_per_question": s.marks_per_question, "order_index": s.order_index} for s in secs],
         "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans, "section_id": q.section_id, "order_index": q.order_index, "marks": q.marks, "content_format": q.content_format} for q in qs],
         "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps],
@@ -554,20 +562,29 @@ def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session 
     sessions = dedupe_sessions_per_student(all_sessions)
     
     session_ids = [s.id for s in sessions]
-    violation_counts = {}
+    # Get violation breakdown per session
+    violation_detail = {}
     if session_ids:
-        v_data = db.query(ViolationLog.session_id, func.count(ViolationLog.id)).filter(ViolationLog.session_id.in_(session_ids)).group_by(ViolationLog.session_id).all()
-        violation_counts = {row[0]: row[1] for row in v_data}
+        v_rows = db.query(ViolationLog.session_id, ViolationLog.event_type, func.count(ViolationLog.id)).filter(
+            ViolationLog.session_id.in_(session_ids)
+        ).group_by(ViolationLog.session_id, ViolationLog.event_type).all()
+        for sid, etype, cnt in v_rows:
+            if sid not in violation_detail:
+                violation_detail[sid] = {}
+            violation_detail[sid][etype] = cnt
 
     active_now = 0; total_submitted = 0; student_data = []
     for s in sessions:
         if s.is_submitted: total_submitted += 1
         else: active_now += 1
             
-        violations = violation_counts.get(s.id, 0)
+        breakdown = violation_detail.get(s.id, {})
+        total_violations = sum(breakdown.values())
         student_data.append({
             "student_id": s.student_id, "session_id": s.id,
-            "submitted": s.is_submitted, "total_violations": violations,
+            "submitted": s.is_submitted, "is_locked": s.is_revoked and not s.is_submitted,
+            "total_violations": total_violations,
+            "violation_breakdown": breakdown,
             "joined_at": s.created_at
         })
         
@@ -585,6 +602,19 @@ def revoke_session(payload: RevokePayload, _: bool = Depends(verify_admin), db: 
     session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
     if session:
         session.is_revoked = True
+        db.commit()
+    return {"success": True}
+
+# ── 5. GRANT SESSION (UNLOCK STUDENT) ──────────────────────────────────────────
+class GrantPayload(BaseModel):
+    session_id: str
+
+@router.post("/sessions/grant")
+def grant_session(payload: GrantPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    """Unlock a student whose session was revoked due to violations. Preserves all exam state."""
+    session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
+    if session:
+        session.is_revoked = False
         db.commit()
     return {"success": True}
 
