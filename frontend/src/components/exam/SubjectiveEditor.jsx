@@ -56,6 +56,35 @@ export default function SubjectiveEditor({
       })
       .run();
 
+    // ROOT CAUSE FIX:
+    // mathBlock is an atom node. After insertContent(), TipTap leaves a
+    // NodeSelection sitting ON the atom (cursor cannot go "inside" an atom).
+    // Two bugs stemmed from this:
+    //  1. Nothing to continue typing into -> can't type after an equation.
+    //  2. Because selection is a NodeSelection on the math node, the NEXT
+    //     insertContent() call replaces that selected node instead of
+    //     inserting after it -> equations overwrite each other.
+    // Fix: ensure there is always a text block right after the inserted
+    // math node, and move the cursor (TextSelection) into it.
+    const { state } = editor;
+    const afterPos = state.selection.to; // position right after the atom
+    const nodeAfter = state.doc.nodeAt(afterPos);
+
+    if (!nodeAfter || !nodeAfter.isTextblock) {
+      editor
+        .chain()
+        .insertContentAt(afterPos, { type: 'paragraph' })
+        .setTextSelection(afterPos + 1)
+        .focus()
+        .run();
+    } else {
+      editor
+        .chain()
+        .setTextSelection(afterPos + 1)
+        .focus()
+        .run();
+    }
+
     setShowMathPopover(false);
   }, [editor]);
 

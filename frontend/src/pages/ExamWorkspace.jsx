@@ -212,7 +212,6 @@ function LockOverlay({ examId, answers, subjectiveAnswers, navigate, onUnlocked 
 }
 
 export default function ExamWorkspace() {
-  useProctoring('enforcement'); // violations now reported + counted
   const { examId } = useParams();
   const navigate = useNavigate();
 
@@ -335,6 +334,28 @@ export default function ExamWorkspace() {
     }
     return null;
   };
+
+  // ROOT CAUSE FIX: this used to be a local function defined INSIDE the
+  // "ANTI-CHEAT ENGINE" useEffect below, reachable only by tab-switch /
+  // copy-paste / keydown handlers in that same effect. Camera/audio
+  // violations (from proctoringEngine, wired via useProctoring) had their
+  // own separate raw `violationApi.post(...)` call that never touched this
+  // function — so they were recorded server-side (count incremented) but
+  // NEVER shown to the student (no setShowViolationModal, no toast).
+  // Lifting it to component scope lets useProctoring('enforcement', ...)
+  // share the exact same notification pipeline as every other violation type.
+  const triggerViolation = useCallback((event_type, detail = "") => {
+    violationApi
+      .post("/exam/violation", { event_type, detail })
+      .catch(() => {});
+    setLastViolationType(event_type);
+    syncViolationCount().then((serverCount) => {
+      if (serverCount === null) setViolationCount((prev) => prev + 1);
+      setShowViolationModal(true);
+    });
+  }, []);
+
+  useProctoring('enforcement', triggerViolation); // camera/audio violations now notify too
 
   const [consoleOutput, setConsoleOutput] = useState("Ready to compile...");
   const [selectedTestCase, setSelectedTestCase] = useState(0);
@@ -509,21 +530,6 @@ export default function ExamWorkspace() {
     if (!document.fullscreenElement)
       setTimeout(() => setNeedsFullscreen(true), 0);
 
-    const logViolation = (event_type, detail = "") => {
-      violationApi
-        .post("/exam/violation", { event_type, detail })
-        .catch(() => {});
-    };
-
-    const triggerViolation = (event_type, detail = "") => {
-      logViolation(event_type, detail);
-      setLastViolationType(event_type);
-      syncViolationCount().then((serverCount) => {
-        if (serverCount === null) setViolationCount((prev) => prev + 1);
-        setShowViolationModal(true);
-      });
-    };
-
     const handleVisibilityChange = () => {
       if (document.hidden)
         triggerViolation(
@@ -611,8 +617,7 @@ export default function ExamWorkspace() {
       window.removeEventListener("popstate", handlePopState);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, []);
-  // ── END ANTI-CHEAT ENGINE ───────────────────────────────────────────────
+  }, [triggerViolation]);
 
   useEffect(() => {
     const loadWorkspace = async () => {

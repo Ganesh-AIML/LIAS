@@ -950,10 +950,21 @@ def update_master_student(
     if payload.name is not None:
         student.name = payload.name
     if payload.password:
-        student.password = bcrypt.hashpw(
+        hashed = bcrypt.hashpw(
             payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
         ).decode("utf-8")
+        student.password = hashed
         student.needs_password_reset = False
+
+        # ROOT CAUSE FIX: exam login (auth.py) verifies against
+        # TokenRegistry.password_hash, not Student.password. Without this
+        # resync, saving a new password here updated the Master Directory
+        # record but left already-assigned exam tokens on the OLD hash, so
+        # the student couldn't actually log in with the new password.
+        # Mirrors the same resync done in reset_and_resync_student below.
+        db.query(TokenRegistry).filter(TokenRegistry.student_id == student_id).update(
+            {"password_hash": hashed}
+        )
 
     db.commit()
     return {"success": True}
