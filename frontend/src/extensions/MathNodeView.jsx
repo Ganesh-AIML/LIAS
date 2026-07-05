@@ -31,8 +31,9 @@ export default function MathNodeView({ node, selected, editor, deleteNode }) {
     <NodeViewWrapper
       className={`math-block-wrapper ${selected ? 'ring-2 ring-blue-400' : ''}`}
       data-drag-handle
+      contentEditable={false}
     >
-      <div ref={containerRef} className="py-2 px-4 bg-slate-50 rounded" />
+      <div ref={containerRef} className="py-2 px-4 bg-slate-50 rounded" contentEditable={false} />
       {editor.isEditable && (
         <button
           onClick={deleteNode}

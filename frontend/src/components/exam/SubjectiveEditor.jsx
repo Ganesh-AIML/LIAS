@@ -38,11 +38,25 @@ export default function SubjectiveEditor({
     },
   });
 
+  // Ensures the doc never ends on a bare atom (mathBlock) node with nothing
+  // after it — otherwise there is literally no valid text position for the
+  // student to click/type into. Runs both right after inserting a new
+  // equation AND after loading a previously-saved answer that happens to
+  // already end in an equation (legacy data saved before this fix).
+  const ensureTrailingParagraph = useCallback((ed) => {
+    const { state } = ed;
+    const lastNode = state.doc.lastChild;
+    if (lastNode && lastNode.type.name === 'mathBlock') {
+      ed.chain().insertContentAt(state.doc.content.size, { type: 'paragraph' }).run();
+    }
+  }, []);
+
   useEffect(() => {
     if (editor && initialValue && editor.isEmpty) {
       editor.commands.setContent(initialValue);
+      ensureTrailingParagraph(editor);
     }
-  }, [editor, initialValue]);
+  }, [editor, initialValue, ensureTrailingParagraph]);
 
   const handleMathConfirm = useCallback((latex) => {
     if (!editor) return;
@@ -56,7 +70,7 @@ export default function SubjectiveEditor({
       })
       .run();
 
-    // ROOT CAUSE FIX:
+    // ROOT CAUSE FIX (part 1 — selection):
     // mathBlock is an atom node. After insertContent(), TipTap leaves a
     // NodeSelection sitting ON the atom (cursor cannot go "inside" an atom).
     // Two bugs stemmed from this:
