@@ -39,6 +39,16 @@ const LUMA_DARK_STREAK_REQ = 2;    // consecutive dark checks before flagging (~
 const FACE_FAIL_STREAK_THRESHOLD = 10; // ~ a few seconds at FACE_FRAME_SKIP cadence
 const COCO_FAIL_STREAK_THRESHOLD = 4;  // ~ a few scan cycles (OBJECT_SCAN_MS apart)
 
+// Face Absent (plain "no landmarks in this frame" case) had ZERO debounce —
+// a single missed frame (autofocus hunt, brief head tilt, one dropped/
+// corrupted frame) fired an immediate violation. Every OTHER face_absent
+// sub-path (track-ended, luma/shutter, degraded-pipeline) already has its
+// own streak guard; this is the one that didn't. 20 consecutive misses at
+// the ~15/s cadence this pipeline runs at (FACE_FRAME_SKIP=2) is ~1.3-2s —
+// long enough to absorb a transient blip, short enough that genuine absence
+// still confirms fast.
+const FACE_ABSENT_STREAK_REQ = 20;
+
 let scriptPromises = {};
 function loadScript(src) {
   if (scriptPromises[src]) return scriptPromises[src];
@@ -81,6 +91,7 @@ class ProctoringEngine {
     this.cooldown = {};
     this.faceInferenceOk = false; // set true the first time detectForVideo() runs without throwing — readiness.js requires this under strict policy
     this.faceFailStreak = 0;   // consecutive detectForVideo() exceptions — AUD-052
+    this.faceAbsentStreak = 0; // consecutive "no landmarks in frame" results — new debounce for false-positive face_absent
     this.cocoFailStreak = 0;   // consecutive cocoModel.detect() rejections — AUD-052
     this.faceDegraded = false; // true once face pipeline is treated as fatally broken, not just glitchy
     this.cocoDegraded = false; // true once object-detection pipeline is treated as fatally broken
@@ -215,6 +226,7 @@ class ProctoringEngine {
         this.faceFailStreak = 0;
         this.faceDegraded = false;
         if (result.facialTransformationMatrixes?.length) {
+          this.faceAbsentStreak = 0; // face seen again — clear any building miss-streak immediately
           const m = result.facialTransformationMatrixes[0].data;
           const sy = Math.sqrt(m[0] * m[0] + m[4] * m[4]);
           if (sy > 1e-6) {
@@ -224,7 +236,13 @@ class ProctoringEngine {
             }
           }
         } else {
-          this._flag('face_absent', 'Face not detected — absent or covered');
+          // Debounced: a single missed frame (autofocus hunt, brief head tilt,
+          // one dropped frame) no longer fires immediately. Only flag once
+          // FACE_ABSENT_STREAK_REQ consecutive frames come back empty.
+          this.faceAbsentStreak++;
+          if (this.faceAbsentStreak >= FACE_ABSENT_STREAK_REQ) {
+            this._flag('face_absent', 'Face not detected — absent or covered');
+          }
         }
       } catch (err) {
         // AUD-052: do not silently absorb this. A single bad frame is normal
@@ -359,6 +377,7 @@ class ProctoringEngine {
     this.darkStreak = 0;
     this.faceInferenceOk = false;
     this.faceFailStreak = 0;
+    this.faceAbsentStreak = 0;
     this.cocoFailStreak = 0;
     this.faceDegraded = false;
     this.cocoDegraded = false;

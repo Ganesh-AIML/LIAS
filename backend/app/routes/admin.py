@@ -599,9 +599,23 @@ class RevokePayload(BaseModel):
 
 @router.post("/sessions/revoke")
 def revoke_session(payload: RevokePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+    """
+    Force-terminate a student's session (admin kick-out button).
+
+    ROOT CAUSE FIX: this used to only set is_revoked=True. The dashboard's
+    Active/Completed split (and the "is_locked" flag) is driven entirely by
+    is_submitted (see list_monitor_data above + LiveTestMonitor.jsx's
+    `s.submitted` filter) — so a revoked session with is_submitted still
+    False stayed in Active Candidates forever, even though the confirm
+    dialog promises "This auto-submits their current progress." Setting
+    is_submitted=True here is what actually finalizes the session, exactly
+    like the student's own /exam/{id}/submit endpoint does — moving them
+    into Completed Candidates and clearing the locked state.
+    """
     session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
     if session:
         session.is_revoked = True
+        session.is_submitted = True
         db.commit()
     return {"success": True}
 
