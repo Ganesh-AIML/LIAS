@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Code2, TerminalSquare, Lock, Unlock, XCircle, UploadCloud } from 'lucide-react';
-import JSZip from 'jszip'; // Required dependency
+import { Plus, Trash2, Code2, TerminalSquare, Lock, Unlock, XCircle } from 'lucide-react';
 
 const generateId = () => `cp_${Math.random().toString(36).substr(2, 9)}`;
 const generateTcId = () => `tc_${Math.random().toString(36).substr(2, 9)}`;
@@ -14,56 +13,6 @@ export default function CodingProblemBuilder({ problems, setProblems }) {
   const updateTestCase = (probId, tcId, field, value) => setProblems(problems.map(p => p.id === probId ? { ...p, testCases: p.testCases.map(tc => tc.id === tcId ? { ...tc, [field]: value } : tc) } : p));
   const removeTestCase = (probId, tcId) => setProblems(problems.map(p => p.id === probId ? { ...p, testCases: p.testCases.filter(tc => tc.id !== tcId) } : p));
 
-  // Feature: Bulk ZIP Import
-  const handleZipUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const zip = await JSZip.loadAsync(file);
-      const newProblemsMap = {};
-
-      for (const relativePath of Object.keys(zip.files)) {
-        if (zip.files[relativePath].dir) continue;
-        
-        const pathParts = relativePath.split('/');
-        const probFolder = pathParts[0];
-        
-        if (!newProblemsMap[probFolder]) {
-          newProblemsMap[probFolder] = {
-            id: generateId(), title: probFolder, description: '', constraints: '', languages: '71,54,62,50', testCases: [], _tempTcMap: {}
-          };
-        }
-        
-        const content = await zip.files[relativePath].async('string');
-        const fileName = pathParts[pathParts.length - 1];
-
-        if (fileName.toLowerCase() === 'readme.md') {
-          newProblemsMap[probFolder].description = content;
-        } else if (fileName.startsWith('input')) {
-          const tcNum = fileName.match(/\d+/)?.[0] || '1';
-          if (!newProblemsMap[probFolder]._tempTcMap[tcNum]) newProblemsMap[probFolder]._tempTcMap[tcNum] = { id: generateTcId(), input: '', output: '', isHidden: false };
-          newProblemsMap[probFolder]._tempTcMap[tcNum].input = content.trim();
-        } else if (fileName.startsWith('output')) {
-          const tcNum = fileName.match(/\d+/)?.[0] || '1';
-          if (!newProblemsMap[probFolder]._tempTcMap[tcNum]) newProblemsMap[probFolder]._tempTcMap[tcNum] = { id: generateTcId(), input: '', output: '', isHidden: false };
-          newProblemsMap[probFolder]._tempTcMap[tcNum].output = content.trim();
-        }
-      }
-
-      const importedProblems = Object.values(newProblemsMap).map(p => {
-        p.testCases = Object.values(p._tempTcMap);
-        delete p._tempTcMap;
-        return p;
-      });
-
-      setProblems(prev => [...prev, ...importedProblems]);
-      alert(`Successfully imported ${importedProblems.length} coding problems from ZIP.`);
-    } catch (err) {
-      alert("Error parsing ZIP file. Ensure it contains Folders with README.md and input/output txt files.");
-    }
-    e.target.value = '';
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -71,10 +20,6 @@ export default function CodingProblemBuilder({ problems, setProblems }) {
           <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Code2 size={20} className="text-blue-700" /> Coding Challenges</h2>
         </div>
         <div className="flex gap-2">
-          <label className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer shadow-sm">
-            <UploadCloud size={16} /> Bulk ZIP Import
-            <input type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
-          </label>
           <button onClick={addProblem} className="flex items-center gap-1.5 bg-blue-900 hover:bg-blue-800 text-white px-4 py-2 rounded-lg text-sm font-bold transition-all shadow-sm"><Plus size={16} /> Add Problem</button>
         </div>
       </div>

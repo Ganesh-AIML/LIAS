@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import MarkdownZipImporter, { parseMarkdownZip } from "../../../components/admin/MarkdownZipImporter";
+import { useState } from "react";
+import TexZipImporter from "../../../components/admin/TexZipImporter";
 import {
   ArrowLeft,
   Save,
@@ -9,9 +9,7 @@ import {
   Settings,
   Plus,
   Trash2,
-  Upload,
   CheckCircle2,
-  Circle,
   BookOpen,
   AlertCircle,
 } from "lucide-react";
@@ -112,42 +110,9 @@ export default function ScheduleTest({ initialData, onBack }) {
   const removeSubjectiveQ = (id) => setSubjectiveQuestions(prev => prev.filter(q => q.id !== id));
   const updateSubjectiveQ = (id, field, value) => setSubjectiveQuestions(prev => prev.map(q => q.id === id ? { ...q, [field]: value } : q));
 
-  const handleAikenImport = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const text = ev.target.result;
-        const blocks = text.split(/\n\s*\n/).map((b) => b.trim()).filter((b) => b);
-        const importedQuestions = blocks.map((block) => {
-          const lines = block.split("\n").map((l) => l.trim()).filter((l) => l);
-          if (lines.length < 6) return null;
-          const text = lines[0];
-          const opts = { A: "", B: "", C: "", D: "" };
-          let ans = "A";
-          for (let i = 1; i < lines.length; i++) {
-            const line = lines[i];
-            if (line.match(/^A[).]/i)) opts.A = line.substring(2).trim();
-            else if (line.match(/^B[).]/i)) opts.B = line.substring(2).trim();
-            else if (line.match(/^C[).]/i)) opts.C = line.substring(2).trim();
-            else if (line.match(/^D[).]/i)) opts.D = line.substring(2).trim();
-            else if (line.match(/^ANSWER:/i)) ans = line.replace(/^ANSWER:/i, "").trim().toUpperCase();
-          }
-          return { id: generateId(), section: "Aptitude", text, optA: opts.A, optB: opts.B, optC: opts.C, optD: opts.D, ans };
-        }).filter((q) => q !== null);
-        setQuestions((prev) => [...prev, ...importedQuestions]);
-        alert(`Successfully imported ${importedQuestions.length} questions.`);
-      } catch (err) {
-        alert("Failed to parse Aiken file. Please check formatting.");
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  };
-
-  // Markdown/ZIP bulk import — merges parsed sections into existing question arrays
-  const handleMarkdownImport = ({ sections, errors }) => {
+  // TEX/ZIP bulk import — sole import path (Task 2). Merges parsed sections
+  // (mcq/subjective) and coding problems into their respective state arrays.
+  const handleTexImport = ({ sections, codingProblems }) => {
     const newMcq  = [];
     const newSubj = [];
 
@@ -179,6 +144,7 @@ export default function ScheduleTest({ initialData, onBack }) {
 
     if (newMcq.length)  setQuestions(prev        => [...prev, ...newMcq]);
     if (newSubj.length) setSubjectiveQuestions(prev => [...prev, ...newSubj]);
+    if (codingProblems && codingProblems.length) setCodingProblems(prev => [...prev, ...codingProblems]);
   };
 
   const handlePublish = async (status) => {
@@ -375,12 +341,8 @@ export default function ScheduleTest({ initialData, onBack }) {
                 <span className="text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">{questions.length}</span>
               </h2>
               <div className="flex gap-2">
-                <label className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 px-4 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm">
-                  <Upload size={15} /> Import Aiken
-                  <input type="file" accept=".txt" className="hidden" onChange={handleAikenImport} />
-                </label>
-                <MarkdownZipImporter
-                  onImport={handleMarkdownImport}
+                <TexZipImporter
+                  onImport={handleTexImport}
                   className="inline-flex"
                 />
                 <button
@@ -396,7 +358,7 @@ export default function ScheduleTest({ initialData, onBack }) {
               <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-16 text-center">
                 <FileText size={32} className="text-slate-200 mx-auto mb-3" />
                 <p className="text-slate-500 font-bold">No questions yet.</p>
-                <p className="text-slate-400 text-sm mt-1">Add manually or import an Aiken-format file.</p>
+                <p className="text-slate-400 text-sm mt-1">Add manually or import a TEX ZIP file.</p>
               </div>
             )}
 
@@ -467,8 +429,8 @@ export default function ScheduleTest({ initialData, onBack }) {
                 <span className="text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">{subjectiveQuestions.length}</span>
               </h2>
               <div className="flex gap-2 items-center">
-                <MarkdownZipImporter
-                  onImport={handleMarkdownImport}
+                <TexZipImporter
+                  onImport={handleTexImport}
                   className="inline-flex"
                 />
                 <button

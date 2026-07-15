@@ -29,6 +29,22 @@ logger = logging.getLogger("scope")
 # the original submitted one (now revoked by a later re-login) and a fresh
 # empty one from the re-login itself. Admin views must report the student's
 # real submitted attempt, not whichever row happens to be non-revoked.
+# AUD-041: shared exam status/end-time calc, used by /exams and /master-students
+# (Assigned Exams visibility filter) so both stay consistent. Server clock only —
+# never trust browser time for LIVE/expired decisions.
+def compute_exam_status(exam, now: float):
+    """Return (computed_status, end_at_epoch_seconds) for an exam."""
+    if exam.status == "draft":
+        return "draft", exam.starts_at + exam.duration_seconds
+    end_at = exam.starts_at + exam.duration_seconds
+    if exam.starts_at > now:
+        return "upcoming", end_at
+    elif now <= end_at:
+        return "live", end_at
+    else:
+        return "completed", end_at
+
+
 def dedupe_sessions_per_student(sessions):
     """Given a list of ExamSession rows (any exam_id mix), return one row
     per (student_id, exam_id): the submitted one if any exists, else the
@@ -510,15 +526,9 @@ def list_active_exams(
     result = []
 
     for exam in exams:
-        if exam.status == "draft":
-            continue
-        end_at = exam.starts_at + exam.duration_seconds
-        if exam.starts_at > now:
-            computed_status = "upcoming"
-        elif now <= end_at:
-            computed_status = "live"
-        else:
-            continue  # completed — skip
+        computed_status, _end_at = compute_exam_status(exam, now)
+        if computed_status not in ("upcoming", "live"):
+            continue  # draft / completed — skip
 
         result.append({
             "id":               exam.id,
@@ -769,12 +779,7 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
 
     result = []
     for exam in exams:
-        if exam.status == "draft": computed_status = "draft"
-        else:
-            end_at = exam.starts_at + exam.duration_seconds
-            if exam.starts_at > now: computed_status = "upcoming"
-            elif now <= end_at: computed_status = "live"
-            else: computed_status = "completed"
+        computed_status, end_at = compute_exam_status(exam, now)
 
         dec_start = "********"
         dec_end = None 
@@ -851,13 +856,34 @@ def list_master_students(
     """
     Return all students from Master Directory with their exam enrollments.
     Each student row includes a list of exam_ids they're enrolled in (from TokenRegistry).
+
+    AUD-041: "Assigned Exams" only shows enrollments for exams that are still
+    LIVE, or that ended less than 1 hour ago. Older-completed enrollments are
+    NOT deleted anywhere — TokenRegistry rows, sessions, and history all stay
+    intact. This is a display-only filter for the Master Directory UI, so we
+    do it here (backend) rather than shipping every stale enrollment to the
+    frontend just to hide it there.
     """
     students = db.query(Student).order_by(Student.created_at.desc()).all()
+
+    now = time.time()
+    HIDE_AFTER_SECONDS = 3600  # 1 hour grace period after exam end
+
+    # Bulk-fetch exam status/end-time once, reuse the same calc as /admin/exams
+    exam_status_map = {
+        exam.id: compute_exam_status(exam, now) for exam in db.query(Exam).all()
+    }
 
     # Bulk-fetch all enrollments keyed by student_id
     enrollments = db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token).all()
     enrollment_map: dict[str, list] = {}
     for e in enrollments:
+        status_end = exam_status_map.get(e.exam_id)
+        if status_end is not None:
+            computed_status, end_at = status_end
+            is_visible = computed_status == "live" or now <= end_at + HIDE_AFTER_SECONDS
+            if not is_visible:
+                continue  # exam ended >1hr ago — hide from Assigned Exams, keep the row in DB
         enrollment_map.setdefault(e.student_id, []).append({
             "exam_id": e.exam_id,
             "token":   e.token,
