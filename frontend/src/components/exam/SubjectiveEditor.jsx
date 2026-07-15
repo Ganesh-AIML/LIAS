@@ -106,8 +106,6 @@ export default function SubjectiveEditor({
 
   return (
     <div className="relative flex flex-col gap-2">
-      <p className="text-slate-700 font-medium">{questionText}</p>
-
       <div className="flex items-center gap-1 border border-slate-200 rounded-t-lg px-2 py-1 bg-slate-50">
         <ToolbarButton
           onClick={() => editor.chain().focus().toggleBold().run()}
