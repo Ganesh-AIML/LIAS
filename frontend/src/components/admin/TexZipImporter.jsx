@@ -254,6 +254,9 @@ function convertFormatting(text) {
   out = inlineCmd(out, 'textit', s => `*${s}*`);
   out = inlineCmd(out, 'emph', s => `*${s}*`);
   out = inlineCmd(out, 'underline', s => `__${s}__`);
+  out = inlineCmd(out, 'boldsymbol', s => `**${s}**`);
+  out = inlineCmd(out, 'mathrm', s => s);
+  out = out.replace(/\\pounds/g, '£');
 
   // itemize / enumerate → markdown lists (\item per line)
   out = out.replace(/\\begin\{itemize\}([\s\S]*?)\\end\{itemize\}/g, (_, body) =>
@@ -278,6 +281,82 @@ function resolveImages(text, imagesMap, questionLabel, errors) {
   });
 }
 
+// ─── TABLE CONVERSION (tabular → GFM pipe table) ───────────────────────────
+
+function convertTableToGFM(body) {
+  let out = body
+    .replace(/\\toprule\s*/g, '')
+    .replace(/\\midrule\s*/g, '')
+    .replace(/\\bottomrule\s*/g, '')
+    .replace(/\\hline\s*/g, '');
+
+  const rows = out.split(/\\\\/).map(r => r.trim()).filter(r => r.length > 0);
+  if (rows.length === 0) return '';
+
+  const gfmRows = [];
+  for (let i = 0; i < rows.length; i++) {
+    const cells = rows[i].split('&').map(c => {
+      let cell = c.trim();
+      cell = convertFormatting(cell);
+      return cell;
+    });
+    if (i === 0) {
+      gfmRows.push('| ' + cells.join(' | ') + ' |');
+      gfmRows.push('| ' + cells.map(() => '---').join(' | ') + ' |');
+    } else {
+      gfmRows.push('| ' + cells.join(' | ') + ' |');
+    }
+  }
+  return '\n\n' + gfmRows.join('\n') + '\n\n';
+}
+
+// ─── PRE-PROCESSOR: strip/replace block environments before formatting ──────
+
+function preprocessLaTeX(text, errors) {
+  let out = text;
+
+  // 1. Strip \begin{center}...\end{center} — keep content
+  let result = '';
+  let idx = 0;
+  while (true) {
+    const found = findEnv(out, 'center', idx, errors);
+    if (!found) break;
+    result += out.slice(idx, found.matchStart);
+    result += found.body;
+    idx = found.matchEnd;
+  }
+  result += out.slice(idx);
+  out = result;
+
+  // 2. Replace \begin{tikzpicture}...\end{tikzpicture} with placeholder
+  result = '';
+  idx = 0;
+  while (true) {
+    const found = findEnv(out, 'tikzpicture', idx, errors);
+    if (!found) break;
+    result += out.slice(idx, found.matchStart);
+    result += '\n*[Diagram: see printed question paper]*\n';
+    idx = found.matchEnd;
+  }
+  result += out.slice(idx);
+  out = result;
+
+  // 3. Convert \begin{tabular}...\end{tabular} to GFM table
+  result = '';
+  idx = 0;
+  while (true) {
+    const found = findEnv(out, 'tabular', idx, errors);
+    if (!found) break;
+    result += out.slice(idx, found.matchStart);
+    result += convertTableToGFM(found.body);
+    idx = found.matchEnd;
+  }
+  result += out.slice(idx);
+  out = result;
+
+  return out;
+}
+
 // ─── Question parsing ────────────────────────────────────────────────────────
 
 function parseQuestionBody(rawBody, type, imagesMap, questionLabel, errors) {
@@ -288,7 +367,7 @@ function parseQuestionBody(rawBody, type, imagesMap, questionLabel, errors) {
   let answer = null;
   mainText = mainText.replace(/\\answer\{([A-Da-d])\}/, (_, a) => { answer = a.toUpperCase(); return ''; });
 
-  const text = normalizeMath(convertFormatting(resolveImages(mainText, imagesMap, questionLabel, errors)));
+  const text = normalizeMath(convertFormatting(preprocessLaTeX(resolveImages(mainText, imagesMap, questionLabel, errors), errors)));
 
   if (type === 'subjective') {
     if (!text) errors.push({ location: questionLabel, message: 'Question body is empty.' });
@@ -304,7 +383,7 @@ function parseQuestionBody(rawBody, type, imagesMap, questionLabel, errors) {
     const choiceRe = /\\choice\s+([A-Da-d])\s*[:)]\s*([\s\S]*?)(?=\\choice\s+[A-Da-d]\s*[:)]|$)/g;
     let m;
     while ((m = choiceRe.exec(choicesEnv.body)) !== null) {
-      opts[m[1].toUpperCase()] = normalizeMath(convertFormatting(resolveImages(m[2].trim(), imagesMap, questionLabel, errors)));
+      opts[m[1].toUpperCase()] = normalizeMath(convertFormatting(preprocessLaTeX(resolveImages(m[2].trim(), imagesMap, questionLabel, errors), errors)));
     }
     // \answer{X} sometimes placed inside \choices
     const inChoiceAns = /\\answer\{([A-Da-d])\}/.exec(choicesEnv.body);

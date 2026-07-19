@@ -20,6 +20,9 @@ node_modules/
 dist/
 .vite/
 
+# TeX question bank source files
+*.tex
+
 # Logs & OS
 *.log
 .DS_Store
