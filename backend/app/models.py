@@ -58,15 +58,23 @@ class Exam(Base):
 
 class ExamSession(Base):
     __tablename__ = "exam_sessions"
-    id                 = Column(String, primary_key=True, index=True)
-    student_id         = Column(String, nullable=False)
-    exam_id            = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
-    session_secret     = Column(String, nullable=False)
-    is_revoked          = Column(Boolean, default=False)
-    is_submitted        = Column(Boolean, default=False)
-    created_at          = Column(Float, default=time.time)
-    subjective_payload  = Column(Text, nullable=True)
-    submission_payload  = Column(Text, nullable=True)   # AUD-001: MCQ+coding answers JSON
+    id                     = Column(String, primary_key=True, index=True)
+    student_id             = Column(String, nullable=False)
+    exam_id                = Column(String, ForeignKey("exams.id", ondelete="CASCADE"), nullable=False)
+    session_secret         = Column(String, nullable=False)
+    is_revoked              = Column(Boolean, default=False)
+    is_submitted            = Column(Boolean, default=False)
+    created_at              = Column(Float, default=time.time)
+    subjective_payload      = Column(Text, nullable=True)
+    submission_payload      = Column(Text, nullable=True)   # AUD-001: MCQ+coding answers JSON
+
+    # ── EVALUATION / MANUAL GRADING COLUMNS (additive, all nullable) ──
+    mcq_score               = Column(Float, nullable=True)   # persisted auto-computed MCQ total
+    coding_evaluation       = Column(Text, nullable=True)    # JSON: {cp_id: marks, ...}
+    subjective_evaluation   = Column(Text, nullable=True)    # JSON: {sq_id: marks, ...}
+    total_score             = Column(Float, nullable=True)   # mcq + sum(coding) + sum(subjective)
+    review_status           = Column(String, nullable=True)  # null | "pending" | "reviewed" | "flagged"
+    evaluated_at            = Column(Float, nullable=True)   # timestamp of last evaluation save
 
     exam = relationship("Exam", back_populates="sessions")
     violations = relationship("ViolationLog", back_populates="session", cascade="all, delete-orphan")

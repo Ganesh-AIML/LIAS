@@ -1,7 +1,7 @@
 import os
 import logging
 import socketio
-from app.routes import auth, exam, admin as admin_routes
+from app.routes import auth, exam, admin as admin_routes, evaluate as evaluate_routes
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -62,9 +62,10 @@ fastapi_app.add_middleware(
     allow_headers     = ["Content-Type", "Authorization", "X-Admin-Token"],
 )
 
-fastapi_app.include_router(auth.router,         prefix="/auth",  tags=["Auth"])
-fastapi_app.include_router(exam.router,         prefix="/exam",  tags=["Exam"])
-fastapi_app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
+fastapi_app.include_router(auth.router,          prefix="/auth",   tags=["Auth"])
+fastapi_app.include_router(exam.router,          prefix="/exam",   tags=["Exam"])
+fastapi_app.include_router(admin_routes.router,  prefix="/admin",  tags=["Admin"])
+fastapi_app.include_router(evaluate_routes.router, prefix="/admin", tags=["Admin"])
 
 def _run_additive_migrations():
     with SessionLocal() as db:
@@ -149,6 +150,20 @@ def _run_additive_migrations():
         except Exception as e:
             db.rollback()
             logger.warning("students backfill skipped: %s", e)
+
+        # ── ANALYTICS EVALUATION COLUMNS (additive, backward compatible) ──
+        try:
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS mcq_score FLOAT;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS coding_evaluation TEXT;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS subjective_evaluation TEXT;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS total_score FLOAT;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS review_status VARCHAR;"))
+            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS evaluated_at FLOAT;"))
+            db.commit()
+            logger.info("✅ evaluation columns ready on exam_sessions.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("evaluation columns migration skipped: %s", e)
 
         # AUD-025: one-time sweep for students backfilled BEFORE this flag existed
         # (e.g. if AUD-024 already ran on this DB in a prior deploy). Anyone who

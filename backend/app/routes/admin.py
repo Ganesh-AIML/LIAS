@@ -449,9 +449,6 @@ def get_exam_analytics(
 
     # 2. Process and Grade each Session
     for s in sessions:
-        apt_score = 0
-        tech_score = 0
-        cod_score = 0
         coding_submissions = []
 
         subj_payload = {}
@@ -471,26 +468,41 @@ def get_exam_analytics(
         mcq_answers = payload.get("mcqs", {})    # Format expected from frontend: {"q_123": "A"}
         code_answers = payload.get("coding", {}) # Format: {"cp_123": {"code": "...", "score": 10, "runtime": 0.5, "results": [...]}}
 
-        # ── GRADE MCQs ──
-        section_scores = {}
-        for q_id, ans in mcq_answers.items():
-            q = q_map.get(q_id)
-            if q and q.ans == ans:
-                pts = q.marks or 1
-                section_scores[q.section] = section_scores.get(q.section, 0) + pts
-                sec_type = section_type_map.get(q.section, 'mcq')
-                if sec_type == 'aptitude':
-                    apt_score += pts
-                else:
-                    tech_score += pts
-        
+        # ── GRADE MCQs — use persisted score if available, else compute on-the-fly ──
+        mcq_score = s.mcq_score
+        if mcq_score is None:
+            mcq_score = 0
+            for q_id, ans in mcq_answers.items():
+                q = q_map.get(q_id)
+                if q and q.ans == ans:
+                    mcq_score += q.marks or 1
+
+        # ── READ PERSISTED EVALUATION SCORES ──
+        coding_eval = {}
+        if s.coding_evaluation:
+            try:
+                coding_eval = json.loads(s.coding_evaluation)
+            except Exception:
+                pass
+        cod_score = sum(coding_eval.values()) if coding_eval else 0
+
+        subj_eval = {}
+        if s.subjective_evaluation:
+            try:
+                subj_eval = json.loads(s.subjective_evaluation)
+            except Exception:
+                pass
+        subjective_score = sum(subj_eval.values()) if subj_eval else 0
+
+        # ── TOTAL SCORE ──
+        total = s.total_score
+        if total is None:
+            total = mcq_score + cod_score + subjective_score
+
         # ── EXTRACT CODING RESULTS ──
         for cp in coding_probs:
             cp_data = code_answers.get(cp.id)
             if cp_data:
-                # AUD-009: client-submitted "score" is NEVER trusted. No execution engine
-                # is integrated (business decision). Coding is stored and marked pending
-                # evaluation only; cod_score is not computed from client data.
                 coding_submissions.append({
                     "problemId": cp.id,
                     "problemTitle": cp.title,
@@ -517,12 +529,14 @@ def get_exam_analytics(
             "department": dept,
             "submitted": s.is_submitted,
             "joined_at": s.created_at,
-            "apt_score": apt_score,
-            "tech_score": tech_score,
-            "section_scores": section_scores,
+            "mcq_score": mcq_score,
             "cod_score": cod_score,
+            "subjective_score": subjective_score,
+            "total_score": total,
             "coding_submissions": coding_submissions,
-            "subjective_answers": subj_payload
+            "subjective_answers": subj_payload,
+            "review_status": s.review_status,
+            "evaluated_at": s.evaluated_at,
         })
     # 3. Return Payload matching AnalyticsView.jsx expectations
     return {
