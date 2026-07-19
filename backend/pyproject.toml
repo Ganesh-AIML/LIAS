@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*", "Test*"]
+addopts = "-v --tb=short -p no:warnings"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/database.py", "tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise HTTPException",
+    "raise ValueError",
+]

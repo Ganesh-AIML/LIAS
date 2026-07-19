@@ -9,15 +9,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL is not set in .env file")
 
-# pool_pre_ping: drops stale connections Neon kills after inactivity
-# pool_size / max_overflow: bound concurrency — prevents connection exhaustion on free-tier Neon
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=2,
-    pool_recycle=1800,   # recycle connections every 30 min — avoids Neon idle timeout
-)
+engine_kwargs = {}
+if not DATABASE_URL.startswith("sqlite"):
+    engine_kwargs.update(
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=2,
+        pool_recycle=1800,
+    )
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

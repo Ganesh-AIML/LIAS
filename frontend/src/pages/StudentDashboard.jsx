@@ -9,41 +9,7 @@ import {
   XCircle, PlayCircle, LogOut, X, Activity, BookOpen, KeyRound,
   BrainCircuit, Database, Code2, RefreshCw, AlertTriangle
 } from 'lucide-react';
-
-const LiveCountdown = ({ rawDate, duration, isUpcoming, ts }) => {
-  const [timeLeft, setTimeLeft] = useState('...'); 
-
-  useEffect(() => {
-    if (!rawDate || !ts) return; 
-
-    const startTimeMs = new Date(rawDate).getTime();
-    const endTimeMs = isUpcoming ? startTimeMs : startTimeMs + (parseInt(duration) || 0) * 60000;
-
-    const updateTimer = () => {
-      const now = ts.now();
-      const diff = endTimeMs - now;
-
-      if (diff <= 0) {
-        setTimeLeft(isUpcoming ? 'Starting Soon...' : 'Exam Ended');
-      } else {
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-        const m = Math.floor((diff / 60000) % 60);
-        const s = Math.floor((diff / 1000) % 60);
-
-        if (days > 0) setTimeLeft(`${days}d ${hours}h ${m}m`);
-        else if (hours > 0) setTimeLeft(`${hours}h ${m}m ${s}s`);
-        else setTimeLeft(`${m}m ${s < 10 ? '0' : ''}${s}s`);
-      }
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-    return () => clearInterval(interval);
-  }, [rawDate, duration, isUpcoming, ts]); 
-
-  return <span className={isUpcoming ? "text-indigo-600 font-black tracking-wide" : "text-red-600 font-black tracking-wide"}>{timeLeft}</span>;
-};
+import LiveCountdown from '../components/ui/LiveCountdown';
 
 export default function StudentDashboard() {
   useProctoring('observation'); // local-only warm-up, never reported
@@ -151,18 +117,8 @@ useEffect(() => {
   }, [isSynced, rawAvailableTests, rawPastResults]); // <--- 'ts' is gone from here
 
   const handleStudentRefresh = async () => {
-    // Issue 26: reset the 60s polling interval so it doesn't fire right after a manual refresh
     if (dashboardHeartbeatRef.current) {
       clearInterval(dashboardHeartbeatRef.current);
-      dashboardHeartbeatRef.current = setInterval(() => {
-        api.get('/exam/student/available-tests')
-          .then(response => {
-            const { availableTests, pastResults } = response.data.data || response.data;
-            setRawAvailableTests(availableTests || []);
-            setRawPastResults(pastResults || []);
-          })
-          .catch(err => console.error('[heartbeat] refresh failed:', err));
-      }, 60000);
     }
     setIsRefreshing(true);
     try {
@@ -365,7 +321,7 @@ useEffect(() => {
               </div>
               <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-5 py-3 text-center shrink-0">
                 <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mb-1">Starts In</p>
-                <p className="text-xl"><LiveCountdown rawDate={upcomingExams[0].date} isUpcoming={true} ts={ts} /></p>
+                <p className="text-xl"><LiveCountdown rawDate={upcomingExams[0].date} isUpcoming={true} ts={ts} className="text-indigo-600 font-black tracking-wide" /></p>
               </div>
             </div>
           ) : (

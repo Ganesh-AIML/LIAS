@@ -3,14 +3,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import io from "socket.io-client";
 import {
   Clock,
+  Code,
   CheckCircle,
   ChevronRight,
   ChevronLeft,
-  Code,
   FileText,
   AlertTriangle,
-  Terminal,
-  XCircle,
   Lock,
   Monitor,
 } from "lucide-react";
@@ -152,19 +150,16 @@ const SmartTimer = ({
 };
 
 // Task 8/10: Lock overlay component — polls backend every 5s to detect admin GRANT.
-// When backend returns 200 (session no longer revoked), calls onUnlocked().
-function LockOverlay({ examId, answers, subjectiveAnswers, navigate, onUnlocked }) {
+function LockOverlay({ examId, submitPayload, navigate, onUnlocked }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const poll = setInterval(async () => {
       try {
         await api.get('/exam/session-status');
-        // 200 = session valid (admin granted) — unlock
         clearInterval(poll);
         onUnlocked();
       } catch {
-        // 401 = still revoked; keep polling
       }
     }, 5000);
     return () => clearInterval(poll);
@@ -173,10 +168,7 @@ function LockOverlay({ examId, answers, subjectiveAnswers, navigate, onUnlocked 
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
-      await api.post(`/exam/${examId}/submit`, {
-        answers, autoSubmit: true,
-        subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
-      });
+      await api.post(`/exam/${examId}/submit`, { answers: submitPayload, autoSubmit: true });
     } catch { /* best effort */ }
     ["answers","codes","active_lang","active_source","subjective"].forEach((key) =>
       sessionStorage.removeItem(`scope_${key}_${examId}`)
@@ -357,17 +349,12 @@ export default function ExamWorkspace() {
 
   useProctoring('enforcement', triggerViolation); // camera/audio violations now notify too
 
-  const [consoleOutput, setConsoleOutput] = useState("Ready to compile...");
-  const [selectedTestCase, setSelectedTestCase] = useState(0);
-
   const [showEndModal, setShowEndModal] = useState(false);
   const [endPasswordInput, setEndPasswordInput] = useState("");
   const [endPasswordError, setEndPasswordError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const hasSubmittedRef = useRef(false); // AUD-020: hard guard, state alone races
-
-  const [consoleHeight, setConsoleHeight] = useState(250);
-  const [isResizing, setIsResizing] = useState(false);
+  const hasSubmittedRef = useRef(false);
+  const autoSubmitPendingRef = useRef(false);
 
   // 🚀 FIX: Removed 'React.' prefix and used the imported 'useMemo'
   const flatQuestions = useMemo(
@@ -404,10 +391,10 @@ export default function ExamWorkspace() {
     setIsSubmitting(true);
     try {
       await api.post(`/exam/${examId}/submit`, {
-  answers,
-  autoSubmit: true,
-  subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
-});
+        answers: buildSubmissionPayload(),
+        autoSubmit: true,
+        subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
+      });
       ["answers", "codes", "active_lang", "active_source", "subjective"].forEach((key) =>
         sessionStorage.removeItem(`scope_${key}_${examId}`),
       );
@@ -430,7 +417,8 @@ export default function ExamWorkspace() {
   };
 
   useEffect(() => {
-    if (isTimeUp && !isSubmitting) {
+    if (isTimeUp && !autoSubmitPendingRef.current) {
+      autoSubmitPendingRef.current = true;
       setTimeout(() => {
         setToastMessage("⏳ Time has expired. Auto-submitting exam...");
         attemptAutoSubmit();
@@ -690,7 +678,6 @@ export default function ExamWorkspace() {
     setSectionStartTimes(prev => ({ ...prev, [section]: Date.now() }));
   };
 
-  // Task 3: advance to next available section after current expires
   const handleSectionExpired = useCallback((expiredSection) => {
     const hasCod  = (examData?.codingProblems || []).length > 0;
     const hasSubj = (examData?.subjectiveQuestions || []).length > 0;
@@ -699,19 +686,15 @@ export default function ExamWorkspace() {
     setLockedSections(prev => ({ ...prev, [expiredSection]: true }));
     setToastMessage(`⏰ ${expiredSection === 'technical' ? 'MCQ' : expiredSection === 'coding' ? 'Coding' : 'Q&A'} time expired. Moving to next section.`);
 
-    // Section order: MCQs → Coding → QnA. When a section expires, move to the NEXT in sequence.
     if (expiredSection === 'technical') {
-      // MCQ expired → go to Coding if present, else QnA
       if (hasCod) { setActiveSection('coding'); recordSectionStart('coding'); }
       else if (hasSubj) { setActiveSection('subjective'); recordSectionStart('subjective'); }
     } else if (expiredSection === 'coding') {
-      // Coding expired → lock coding, go to QnA if present
       setIsCodingLocked(true);
       if (hasSubj) { setActiveSection('subjective'); recordSectionStart('subjective'); }
     } else if (expiredSection === 'subjective') {
-      // QnA expired — last section, nothing to advance to
     }
-  }, [examData, lockedSections]);
+  }, [examData]);
 
   const executeCodingLock = async () => {
     setShowLockModal(false);
@@ -733,58 +716,21 @@ export default function ExamWorkspace() {
     setSourceCode(fallbackTemplate || "// Write your code here");
   };
 
-  const handleRunCode = async () => {
-    if (isCodingLocked || lockedSections['coding']) return; // coding section locked
-    setConsoleOutput("Executing on S.C.O.P.E. Servers...\n");
-    try {
-      const response = await api.post(`/exam/${examId}/run`, {
-        sourceCode,
-        language,
-      });
-      if (response.data.success) {
-        setConsoleOutput({
-          type: "RUN",
-          passed: response.data.data.filter((tc) => tc.status === "Passed")
-            .length,
-          total: response.data.data.length,
-          testCases: response.data.data,
-        });
-        setSelectedTestCase(0);
-      }
-    } catch (error) {
-      console.error(error);
-      setConsoleOutput("Network error: Could not reach execution server.");
-    }
-  };
-
-  const handleSubmitCode = async () => {
-    if (isCodingLocked || lockedSections['coding']) return; // coding section locked
-    setConsoleOutput("Evaluating against ALL test cases...\n");
-    try {
-      const response = await api.post(`/exam/${examId}/submit-code`, {
-        sourceCode,
-        language,
-      });
-      if (response.data.success) {
-        setConsoleOutput({
-          type: "SUBMIT",
-          passed: response.data.data.filter((tc) => tc.status === "Passed")
-            .length,
-          total: response.data.data.length,
-          testCases: response.data.data,
-          earnedMarks: 10,
-          totalMarks: 10,
-        });
-        setSelectedTestCase(0);
-      }
-    } catch (error) {
-      console.error(error);
-      setConsoleOutput("Network error: Could not submit code.");
-    }
-  };
-
   const handleFinishClick = () => {
     setShowEndModal(true);
+  };
+
+  const buildSubmissionPayload = () => {
+    const codingAnswers = {};
+    if (examData?.codingProblems?.length > 0) {
+      examData.codingProblems.forEach(cp => {
+        codingAnswers[cp.id] = { code: sourceCode, language };
+      });
+    }
+    return {
+      mcqs: answers,
+      coding: codingAnswers,
+    };
   };
 
   const confirmAndSubmit = async () => {
@@ -805,9 +751,9 @@ export default function ExamWorkspace() {
         return;
       }
       await api.post(`/exam/${examId}/submit`, {
-  answers,
-  subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
-});
+        answers: buildSubmissionPayload(),
+        subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
+      });
       ["answers", "codes", "active_lang", "active_source", "subjective"].forEach((key) =>
         sessionStorage.removeItem(`scope_${key}_${examId}`),
       );
@@ -823,31 +769,6 @@ export default function ExamWorkspace() {
       }
       setIsSubmitting(false);
     }
-  };
-
-  const startResize = (e) => {
-    e.preventDefault();
-    setIsResizing(true);
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-
-    const onMouseMove = (moveEvent) => {
-      const newHeight = window.innerHeight - moveEvent.clientY;
-      setConsoleHeight(
-        Math.max(60, Math.min(newHeight, window.innerHeight * 0.8)),
-      );
-    };
-
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      setIsResizing(false);
-    };
-
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
   };
 
   const renderMCQSection = (currentIndex, setIndex) => {
@@ -1044,7 +965,6 @@ const renderSubjectiveSection = () => {
 
     return (
       <div className="flex flex-col lg:flex-row h-[calc(100vh-120px)]">
-        {/* LEFT PANE: DESCRIPTION */}
         <div className="w-full lg:w-1/3 bg-white border-r border-slate-200 p-6 overflow-y-auto flex-shrink-0 flex flex-col">
           <h2 className="text-xl font-bold text-slate-900 mb-4">
             {codingProblem?.title || "Coding Challenge"}
@@ -1055,9 +975,11 @@ const renderSubjectiveSection = () => {
                 "Implement the solution logic in the editor."}
             </ReactMarkdown>
           </div>
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 font-medium">
+            Your code will be saved and manually evaluated. No auto-compilation.
+          </div>
         </div>
 
-        {/* RIGHT PANE: EDITOR & CONSOLE */}
         <div className="w-full lg:w-2/3 flex flex-col bg-[#1e1e1e] min-w-0">
           <div className="h-12 bg-[#2d2d2d] border-b border-[#404040] flex items-center justify-between px-4 flex-shrink-0">
             <select
@@ -1071,29 +993,9 @@ const renderSubjectiveSection = () => {
                 </option>
               ))}
             </select>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleRunCode}
-                disabled={isCodingLocked || !!lockedSections['coding']}
-                className="bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Code size={16} /> Run Code
-              </button>
-              <button
-                onClick={handleSubmitCode}
-                disabled={isCodingLocked || !!lockedSections['coding']}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-1.5 px-4 rounded shadow flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <CheckCircle size={16} /> Submit Code
-              </button>
-            </div>
           </div>
 
-          <div
-            className="flex-1 min-h-0 relative"
-            style={{ pointerEvents: isResizing ? "none" : "auto" }}
-          >
+          <div className="flex-1 min-h-0 relative">
             <Suspense
               fallback={
                 <div className="flex flex-col items-center justify-center h-full bg-[#1e1e1e] text-slate-400 p-6 text-center">
@@ -1118,161 +1020,6 @@ const renderSubjectiveSection = () => {
                 }}
               />
             </Suspense>
-          </div>
-
-          <div
-            className="h-1.5 bg-[#333] cursor-row-resize hover:bg-blue-900 transition-colors z-10 flex justify-center items-center group flex-shrink-0"
-            onMouseDown={startResize}
-          >
-            <div className="w-10 h-0.5 bg-[#555] rounded-full group-hover:bg-white transition-colors pointer-events-none" />
-          </div>
-
-          <div
-            style={{ height: consoleHeight }}
-            className="bg-[#1e1e1e] flex flex-col flex-shrink-0"
-          >
-            <div className="bg-[#2d2d2d] px-4 py-2 text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-[#404040] flex items-center gap-2 flex-shrink-0">
-              <Terminal size={14} /> Execution Console
-            </div>
-
-            <div className="flex-1 min-h-0 flex flex-col font-mono text-sm text-slate-300">
-              {typeof consoleOutput === "string" ? (
-                <div className="p-4 overflow-y-auto whitespace-pre-wrap">
-                  {consoleOutput}
-                </div>
-              ) : (
-                <div className="flex flex-col h-full">
-                  <div
-                    className={`p-3 border-b border-[#404040] flex items-center justify-between flex-shrink-0 bg-[#252526]`}
-                  >
-                    <div className="flex items-center gap-4">
-                      <span
-                        className={`font-bold text-lg flex items-center gap-2 ${consoleOutput.passed === consoleOutput.total ? "text-emerald-400" : "text-red-400"}`}
-                      >
-                        {consoleOutput.passed === consoleOutput.total ? (
-                          <CheckCircle size={20} />
-                        ) : (
-                          <XCircle size={20} />
-                        )}
-                        {consoleOutput.passed}/{consoleOutput.total} Test Cases
-                        Passed
-                      </span>
-
-                      {consoleOutput.type === "SUBMIT" && (
-                        <span className="bg-[#1e1e1e] border border-[#404040] text-slate-300 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-1.5 shadow-inner">
-                          Score:
-                          <span
-                            className={
-                              consoleOutput.earnedMarks ===
-                              consoleOutput.totalMarks
-                                ? "text-emerald-400"
-                                : "text-amber-400"
-                            }
-                          >
-                            {consoleOutput.earnedMarks}
-                          </span>
-                          / {consoleOutput.totalMarks}
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">
-                      {consoleOutput.type === "RUN"
-                        ? "Public Run"
-                        : "Final Submit"}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-1 min-h-0">
-                    <div className="w-1/4 border-r border-[#404040] p-2 overflow-y-auto flex flex-col gap-1 bg-[#1e1e1e]">
-                      {consoleOutput.testCases.map((tc, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => setSelectedTestCase(idx)}
-                          className={`text-left px-3 py-2 rounded text-xs font-bold flex justify-between items-center transition-colors ${selectedTestCase === idx ? "bg-[#37373d] text-white shadow-sm" : "text-slate-400 hover:bg-[#2d2d2d]"}`}
-                        >
-                          <span>Case {idx + 1}</span>
-                          {tc.status === "Passed" ? (
-                            <CheckCircle
-                              size={14}
-                              className="text-emerald-500"
-                            />
-                          ) : (
-                            <AlertTriangle size={14} className="text-red-500" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="w-3/4 p-5 overflow-y-auto bg-[#1e1e1e]">
-                      {consoleOutput.testCases[selectedTestCase] && (
-                        <div style={{animation:"toastSlideIn 0.2s ease"}}>
-                          <div className="flex items-center gap-4 mb-6 pb-4 border-b border-[#333]">
-                            <div>
-                              <div className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">
-                                Status
-                              </div>
-                              <div
-                                className={`font-bold ${consoleOutput.testCases[selectedTestCase].status === "Passed" ? "text-emerald-400" : "text-red-400"}`}
-                              >
-                                {
-                                  consoleOutput.testCases[selectedTestCase]
-                                    .status
-                                }
-                              </div>
-                            </div>
-                            <div className="border-l border-[#333] pl-4">
-                              <div className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">
-                                Runtime
-                              </div>
-                              <div className="text-slate-300">
-                                {consoleOutput.testCases[selectedTestCase]
-                                  .time || "N/A"}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mb-2 font-bold text-xs text-slate-400 uppercase tracking-wider">
-                            Standard Input
-                          </div>
-                          <pre className="bg-[#2d2d2d] p-3 rounded-lg border border-[#404040] text-slate-300 mb-4 whitespace-pre-wrap">
-                            {consoleOutput.testCases[
-                              selectedTestCase
-                            ].input?.trim() || "Hidden Data"}
-                          </pre>
-
-                          <div className="mb-2 font-bold text-xs text-slate-400 uppercase tracking-wider">
-                            Expected Output
-                          </div>
-                          <pre className="bg-[#2d2d2d] p-3 rounded-lg border border-[#404040] text-emerald-400 mb-4 whitespace-pre-wrap">
-                            {consoleOutput.testCases[
-                              selectedTestCase
-                            ].expectedOutput?.trim() || "Hidden Data"}
-                          </pre>
-
-                          <div className="mb-2 font-bold text-xs text-slate-400 uppercase tracking-wider">
-                            Your Output
-                          </div>
-                          <pre className="bg-[#2d2d2d] p-3 rounded-lg border border-[#404040] text-slate-300 whitespace-pre-wrap">
-                            {consoleOutput.testCases[selectedTestCase]
-                              .actualOutput
-                              ? consoleOutput.testCases[
-                                  selectedTestCase
-                                ].actualOutput
-                                  .trim()
-                                  .slice(0, 2000) +
-                                (consoleOutput.testCases[selectedTestCase]
-                                  .actualOutput.length > 2000
-                                  ? "\n\n...[OUTPUT TRUNCATED]"
-                                  : "")
-                              : "No Output"}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </div>
@@ -1360,8 +1107,15 @@ const renderSubjectiveSection = () => {
                   </button>
                   <button
                     onClick={() => {
+                      const codAnswers = {};
+                      if (examData?.codingProblems?.length > 0) {
+                        examData.codingProblems.forEach(cp => {
+                          codAnswers[cp.id] = { code: sourceCode || '', language };
+                        });
+                      }
                       api.post(`/exam/${examId}/submit`, {
-                        answers, autoSubmit: true,
+                        answers: { mcqs: answers, coding: codAnswers },
+                        autoSubmit: true,
                         subjective: Object.keys(subjectiveAnswers).length > 0 ? subjectiveAnswers : undefined,
                       })
                       .then(() => {
@@ -1430,11 +1184,9 @@ const renderSubjectiveSection = () => {
       {violationCount >= MAX_VIOLATIONS && !showViolationModal && (
         <LockOverlay
           examId={examId}
-          answers={answers}
-          subjectiveAnswers={subjectiveAnswers}
+          submitPayload={buildSubmissionPayload()}
           navigate={navigate}
           onUnlocked={() => {
-            // Admin granted — reset violation count display so lock disappears
             setViolationCount(0);
             setToastMessage('✅ Your session has been unlocked by the administrator.');
           }}

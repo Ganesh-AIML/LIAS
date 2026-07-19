@@ -10,7 +10,7 @@ from sqlalchemy import func
 from pydantic import BaseModel, ValidationError, Field, field_validator
 from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, ExamSession
+from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, SubjectiveQuestion, Section, ExamSession
 from app.limiter import limiter
 
 router = APIRouter()
@@ -457,10 +457,17 @@ def submit_exam(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     exam_end_time = exam_record.starts_at + exam_record.duration_seconds
-    if time.time() > exam_end_time + LATE_SUBMISSION_GRACE_SECONDS:
+    now = time.time()
+    if now > exam_end_time + LATE_SUBMISSION_GRACE_SECONDS:
         raise HTTPException(
             status_code=403,
             detail="Exam time has expired. Submission is no longer accepted."
+        )
+    # Reject if session was created after exam ended (prevents last-second login + submit)
+    if active_session.created_at > exam_end_time:
+        raise HTTPException(
+            status_code=403,
+            detail="Session created after exam ended. Submission rejected."
         )
 
     answers_data = payload.answers if payload.answers else {}

@@ -1,7 +1,6 @@
 import os
 import logging
 import socketio
-import time
 from app.routes import auth, exam, admin as admin_routes
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +46,7 @@ async def lifespan(app):
             db.commit()
         except Exception:
             db.rollback()
+    _run_additive_migrations()
     yield
 
 fastapi_app = FastAPI(title="S.C.O.P.E. Assessment Gateway", version="2.0.0", lifespan=lifespan)
@@ -56,7 +56,7 @@ fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handle
 
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins     = os.getenv("ALLOWED_ORIGINS", "").split(","),
+    allow_origins     = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","),
     allow_credentials = True,
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers     = ["Content-Type", "Authorization", "X-Admin-Token"],
@@ -66,9 +66,6 @@ fastapi_app.include_router(auth.router,         prefix="/auth",  tags=["Auth"])
 fastapi_app.include_router(exam.router,         prefix="/exam",  tags=["Exam"])
 fastapi_app.include_router(admin_routes.router, prefix="/admin", tags=["Admin"])
 
-# ── ROOT FIX: Create tables synchronously on module load ──
-logger.info("🚀 Initializing S.C.O.P.E. Database Tables...")
-Base.metadata.create_all(bind=engine)
 def _run_additive_migrations():
     with SessionLocal() as db:
         from sqlalchemy import text
@@ -162,11 +159,7 @@ def _run_additive_migrations():
         # inserted from now on. Admins with pre-existing locked-out students
         # should use Reset & Resync, which clears the flag explicitly anyway.
 
-
-_run_additive_migrations()
-# ──────────────────────────────────────────────────────────
-
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=os.getenv("ALLOWED_ORIGINS", "").split(","))
+sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","))
 
 @sio.event
 async def connect(sid, environ):

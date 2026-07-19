@@ -1,4 +1,6 @@
 import os
+import re
+import secrets
 import uuid
 import json
 import time
@@ -7,10 +9,9 @@ import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func
 from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
-import base64
 from app.database import get_db
 from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student
 from app.limiter import limiter
@@ -63,7 +64,6 @@ def dedupe_sessions_per_student(sessions):
 
 # ── AUTH GUARD ─────────────────────────────────────────────────────────────────
 def verify_admin(x_admin_token: str = Header(None)):
-    import secrets
     if (
         not ADMIN_SECRET
         or not x_admin_token
@@ -155,12 +155,37 @@ class ExamCreatePayload(BaseModel):
     def title_not_empty(cls, v):
         if not v or not v.strip():
             raise ValueError("Exam title cannot be empty.")
+        if len(v) > 500:
+            raise ValueError("Exam title too long (max 500 characters).")
+        return v.strip()
+
+    @field_validator("duration_minutes")
+    @classmethod
+    def validate_duration(cls, v):
+        if v < 1 or v > 1440:
+            raise ValueError("Duration must be between 1 and 1440 minutes.")
+        return v
+
+    @field_validator("start_password")
+    @classmethod
+    def validate_start_password(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Start password cannot be empty or exceed 128 characters.")
+        return v
+
+    @field_validator("end_password")
+    @classmethod
+    def validate_end_password(cls, v):
+        if v is not None and len(v) > 128:
+            raise ValueError("End password too long (max 128 characters).")
         return v
 
 # ── UPDATED POST ROUTE: CREATE EXAM WITH ALL CONTENT ──────────────────────────
 
 @router.post("/exams")
+@limiter.limit("10/minute")
 def create_exam(
+    request: Request,
     payload: ExamCreatePayload,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
@@ -268,7 +293,9 @@ def create_exam(
     
 
 @router.put("/exams/{exam_id}")
+@limiter.limit("10/minute")
 def update_exam(
+    request: Request,
     exam_id: str,
     payload: ExamCreatePayload,
     _: bool = Depends(verify_admin),
@@ -400,6 +427,9 @@ def get_exam_analytics(
     # 1. Fetch Master Data
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
+    subjective_questions = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
+    sections = db.query(Section).filter(Section.exam_id == exam_id).all()
+    section_type_map = {s.name: s.type for s in sections}
 
     session_query = (
         db.query(ExamSession)
@@ -448,7 +478,8 @@ def get_exam_analytics(
             if q and q.ans == ans:
                 pts = q.marks or 1
                 section_scores[q.section] = section_scores.get(q.section, 0) + pts
-                if q.section.lower() == 'aptitude':
+                sec_type = section_type_map.get(q.section, 'mcq')
+                if sec_type == 'aptitude':
                     apt_score += pts
                 else:
                     tech_score += pts
@@ -501,7 +532,7 @@ def get_exam_analytics(
             "title": exam.title,
             "questions": [{"id": q.id, "section": q.section, "text": q.text} for q in questions],
             "coding_problems": [{"id": cp.id, "title": cp.title} for cp in coding_probs],
-            "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text} for sq in db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()],
+            "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text} for sq in subjective_questions],
             "students": student_results,
             "total_students": total_students,  # AUD-014: lets callers page through large exams
             "limit": limit,
@@ -607,8 +638,16 @@ def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session 
 class RevokePayload(BaseModel):
     session_id: str
 
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Invalid session_id.")
+        return v
+
 @router.post("/sessions/revoke")
-def revoke_session(payload: RevokePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def revoke_session(request: Request, payload: RevokePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     """
     Force-terminate a student's session (admin kick-out button).
 
@@ -633,8 +672,16 @@ def revoke_session(payload: RevokePayload, _: bool = Depends(verify_admin), db: 
 class GrantPayload(BaseModel):
     session_id: str
 
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Invalid session_id.")
+        return v
+
 @router.post("/sessions/grant")
-def grant_session(payload: GrantPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def grant_session(request: Request, payload: GrantPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     """Unlock a student whose session was revoked due to violations. Preserves all exam state."""
     session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
     if session:
@@ -648,6 +695,31 @@ class StudentCreatePayload(BaseModel):
     exam_id: str
     password: str
 
+    @field_validator("student_id")
+    @classmethod
+    def validate_student_id(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Invalid student_id.")
+        if not re.match(r"^[A-Za-z0-9_\-\.]+$", v):
+            raise ValueError("Student ID contains invalid characters.")
+        return v
+
+    @field_validator("exam_id")
+    @classmethod
+    def validate_exam_id(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Invalid exam_id.")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v):
+        if not v or len(v) > 256:
+            raise ValueError("Invalid password length.")
+        if len(v) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+        return v
+
 class StudentsBulkPayload(BaseModel):
     students: List[StudentCreatePayload]
 
@@ -655,14 +727,27 @@ class StudentsBulkPayload(BaseModel):
 # ── 1. ADD THIS BULK DELETE ENDPOINT ──
 class BulkDeletePayload(BaseModel):
     tokens: List[str]
+    exam_id: Optional[str] = None
+
+    @field_validator("tokens")
+    @classmethod
+    def validate_tokens(cls, v):
+        if not v:
+            raise ValueError("tokens list cannot be empty.")
+        for t in v:
+            if not t or len(t) > 256:
+                raise ValueError("Each token must be non-empty and at most 256 characters.")
+        return v
 
 @router.post("/students/bulk-delete")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
 def bulk_delete_students(request: Request, payload: BulkDeletePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     """High-Performance route to delete multiple students at once."""
     if payload.tokens:
-        # synchronize_session=False makes bulk deletes massively faster in SQLAlchemy
-        db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens)).delete(synchronize_session=False)
+        query = db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens))
+        if payload.exam_id:
+            query = query.filter(TokenRegistry.exam_id == payload.exam_id)
+        query.delete(synchronize_session=False)
         db.commit()
     return {"success": True}
 
@@ -713,8 +798,8 @@ def list_students(
 
 # ── POST STUDENTS (Fortified with Upsert Logic to prevent duplicates) ──────────
 @router.post("/students")
-def create_students(payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
-    import secrets
+@limiter.limit("10/minute")
+def create_students(request: Request, payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
 
     for s in payload.students:
         # 🚀 ROOT FIX 2: Upsert Logic (Check if student already exists for this exam)
@@ -745,7 +830,8 @@ class StudentUpdatePayload(BaseModel):
     is_active: bool
 
 @router.put("/students/{token}")
-def update_student(token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def update_student(request: Request, token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
     record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
     if not record: raise HTTPException(status_code=404)
     record.is_active = payload.is_active
@@ -761,21 +847,31 @@ def delete_student(request: Request, token: str, _: bool = Depends(verify_admin)
     db.commit()
     return {"success": True}
 
-# ── 2. REPLACE YOUR EXISTING list_exams FUNCTION WITH THIS ──
 @router.get("/exams")
-def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):    
-
-    exams = db.query(Exam).all()
+def list_exams(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    _: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Exam).order_by(Exam.starts_at.desc())
+    total = query.count()
+    if limit is not None:
+        query = query.limit(limit).offset(offset)
+    exams = query.all()
     now = time.time()
-    active_sessions = dedupe_sessions_per_student(
-        db.query(ExamSession).all()
+
+    total_counts = dict(
+        db.query(ExamSession.exam_id, func.count(func.distinct(ExamSession.student_id)))
+        .group_by(ExamSession.exam_id)
+        .all()
     )
-    
-    counts_map = {}
-    for session in active_sessions:
-        if session.exam_id not in counts_map: counts_map[session.exam_id] = {"total": 0, "submitted": 0}
-        counts_map[session.exam_id]["total"] += 1
-        if session.is_submitted: counts_map[session.exam_id]["submitted"] += 1
+    submitted_counts = dict(
+        db.query(ExamSession.exam_id, func.count(func.distinct(ExamSession.student_id)))
+        .filter(ExamSession.is_submitted == True)
+        .group_by(ExamSession.exam_id)
+        .all()
+    )
 
     result = []
     for exam in exams:
@@ -786,17 +882,17 @@ def list_exams(_: bool = Depends(verify_admin), db: Session = Depends(get_db)):
         try:
             if exam.start_secret: dec_start = cipher_suite.decrypt(exam.start_secret.encode("utf-8")).decode("utf-8")
             if exam.end_secret: dec_end = cipher_suite.decrypt(exam.end_secret.encode("utf-8")).decode("utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to decrypt secrets for exam %s: %s", exam.id, e)
 
-        stats = counts_map.get(exam.id, {"total": 0, "submitted": 0})
+        stats = {"total": total_counts.get(exam.id, 0), "submitted": submitted_counts.get(exam.id, 0)}
         result.append({
             "id": exam.id, "title": exam.title, "duration_minutes": exam.duration_seconds // 60,
             "starts_at_ms": exam.starts_at * 1000, "status": computed_status,
             "participants": stats["total"], "submitted": stats["submitted"],
             "start_password": dec_start, "end_password": dec_end 
         })
-    return {"success": True, "data": result}
+    return {"success": True, "data": result, "total": total, "limit": limit, "offset": offset}
 
 @router.delete("/exams/{exam_id}")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
@@ -833,10 +929,30 @@ def delete_exam(request: Request, exam_id: str, _: bool = Depends(verify_admin),
 # ── MASTER DIRECTORY CRUD ───────────────────────────────────────────────────────
 
 class MasterStudentCreatePayload(BaseModel):
-    id: str          # student_id, e.g. "23-AIML-101"
+    id: str
     name: Optional[str] = None
     password: str
     is_active: bool = True
+
+    @field_validator("id")
+    @classmethod
+    def validate_student_id(cls, v):
+        if not v or len(v) > 128:
+            raise ValueError("Student ID cannot be empty or exceed 128 characters.")
+        if not v.strip():
+            raise ValueError("Student ID cannot be blank.")
+        if not re.match(r"^[A-Za-z0-9_\-\.]+$", v.strip()):
+            raise ValueError("Student ID contains invalid characters.")
+        return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v):
+        if not v or len(v) > 256:
+            raise ValueError("Invalid password length.")
+        if len(v) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+        return v
 
 class MasterStudentUpdatePayload(BaseModel):
     name: Optional[str] = None
@@ -850,6 +966,8 @@ class MasterStudentsBulkPayload(BaseModel):
 
 @router.get("/master-students")
 def list_master_students(
+    limit: Optional[int] = None,
+    offset: int = 0,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
@@ -864,18 +982,25 @@ def list_master_students(
     do it here (backend) rather than shipping every stale enrollment to the
     frontend just to hide it there.
     """
-    students = db.query(Student).order_by(Student.created_at.desc()).all()
+    query = db.query(Student).order_by(Student.created_at.desc())
+    total = query.count()
+    if limit is not None:
+        query = query.limit(limit).offset(offset)
+    students = query.all()
+    student_ids = [s.id for s in students]
 
     now = time.time()
-    HIDE_AFTER_SECONDS = 3600  # 1 hour grace period after exam end
+    HIDE_AFTER_SECONDS = 3600
 
-    # Bulk-fetch exam status/end-time once, reuse the same calc as /admin/exams
     exam_status_map = {
         exam.id: compute_exam_status(exam, now) for exam in db.query(Exam).all()
     }
 
-    # Bulk-fetch all enrollments keyed by student_id
-    enrollments = db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token).all()
+    enrollments = (
+        db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token)
+        .filter(TokenRegistry.student_id.in_(student_ids))
+        .all()
+    )
     enrollment_map: dict[str, list] = {}
     for e in enrollments:
         status_end = exam_status_map.get(e.exam_id)
@@ -883,7 +1008,7 @@ def list_master_students(
             computed_status, end_at = status_end
             is_visible = computed_status == "live" or now <= end_at + HIDE_AFTER_SECONDS
             if not is_visible:
-                continue  # exam ended >1hr ago — hide from Assigned Exams, keep the row in DB
+                continue
         enrollment_map.setdefault(e.student_id, []).append({
             "exam_id": e.exam_id,
             "token":   e.token,
@@ -897,14 +1022,16 @@ def list_master_students(
             "is_active":   s.is_active,
             "created_at":  s.created_at,
             "needs_password_reset": getattr(s, "needs_password_reset", False),
-            "enrollments": enrollment_map.get(s.id, []),  # [{exam_id, token}, ...]
+            "enrollments": enrollment_map.get(s.id, []),
         })
 
-    return {"success": True, "data": result}
+    return {"success": True, "data": result, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/master-students")
+@limiter.limit("10/minute")
 def create_master_student(
+    request: Request,
     payload: MasterStudentCreatePayload,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
@@ -928,7 +1055,9 @@ def create_master_student(
 
 
 @router.post("/master-students/bulk")
+@limiter.limit("10/minute")
 def bulk_create_master_students(
+    request: Request,
     payload: MasterStudentsBulkPayload,
     _: bool = Depends(verify_admin),
     db: Session = Depends(get_db),
@@ -975,7 +1104,9 @@ def bulk_create_master_students(
 
 
 @router.put("/master-students/{student_id}")
+@limiter.limit("10/minute")
 def update_master_student(
+    request: Request,
     student_id: str,
     payload: MasterStudentUpdatePayload,
     _: bool = Depends(verify_admin),
@@ -1015,7 +1146,9 @@ class ResetAndResyncPayload(BaseModel):
 
 
 @router.post("/master-students/{student_id}/reset-and-resync")
+@limiter.limit("10/minute")
 def reset_and_resync_student(
+    request: Request,
     student_id: str,
     payload: ResetAndResyncPayload,
     _: bool = Depends(verify_admin),
@@ -1076,9 +1209,23 @@ def delete_master_student(
 class AssignStudentsPayload(BaseModel):
     student_ids: List[str]
 
+    @field_validator("student_ids")
+    @classmethod
+    def validate_student_ids(cls, v):
+        if not v:
+            raise ValueError("student_ids list cannot be empty.")
+        for sid in v:
+            if not sid or len(sid) > 128:
+                raise ValueError("Each student_id must be non-empty and at most 128 characters.")
+            if not re.match(r"^[A-Za-z0-9_\-\.]+$", sid):
+                raise ValueError(f"Student ID '{sid}' contains invalid characters.")
+        return v
+
 
 @router.post("/exams/{exam_id}/assign")
+@limiter.limit("10/minute")
 def assign_students_to_exam(
+    request: Request,
     exam_id: str,
     payload: AssignStudentsPayload,
     _: bool = Depends(verify_admin),
@@ -1095,8 +1242,6 @@ def assign_students_to_exam(
       nobody knows. Admin should use Reset & Resync for those first.
     - Returns counts of created vs updated vs skipped vs needs_reset.
     """
-    import secrets as secrets_mod
-
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
@@ -1124,7 +1269,7 @@ def assign_students_to_exam(
             existing.is_active = True
             updated += 1
         else:
-            token = f"LIAS_{student.id.upper()}_{secrets_mod.token_hex(4).upper()}"
+            token = f"LIAS_{student.id.upper()}_{secrets.token_hex(4).upper()}"
             db.add(TokenRegistry(
                 token=token,
                 exam_id=exam_id,

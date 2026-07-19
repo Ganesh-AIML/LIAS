@@ -5,34 +5,7 @@ import {
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
 import { useTrueTime } from '../../../hooks/useTrueTime';
-
-const LiveCountdown = ({ rawDate, duration, isUpcoming, ts }) => {
-  const [timeLeft, setTimeLeft] = useState('...'); 
-  useEffect(() => {
-    if (!rawDate || !ts) return; 
-    const startTimeMs = new Date(rawDate).getTime();
-    const endTimeMs = isUpcoming ? startTimeMs : startTimeMs + (parseInt(duration) || 0) * 60000;
-    const updateTimer = () => {
-      const now = ts.now();
-      const diff = endTimeMs - now;
-      if (diff <= 0) {
-        setTimeLeft(isUpcoming ? 'Starting Soon...' : 'Exam Ended');
-      } else {
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-        const m = Math.floor((diff / 60000) % 60);
-        const s = Math.floor((diff / 1000) % 60);
-        if (days > 0) setTimeLeft(`${days}d ${hours}h ${m}m`);
-        else if (hours > 0) setTimeLeft(`${hours}h ${m}m ${s}s`);
-        else setTimeLeft(`${m}m ${s}s`);
-      }
-    };
-    updateTimer();
-    const intv = setInterval(updateTimer, 1000);
-    return () => clearInterval(intv);
-  }, [rawDate, duration, isUpcoming, ts]);
-  return <span className="font-mono">{timeLeft}</span>;
-};
+import LiveCountdown from '../../../components/ui/LiveCountdown';
 
 export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonitorLive, onViewUpcoming, onViewAnalytics }) {
   const { ts } = useTrueTime();

@@ -176,7 +176,9 @@ def logout_session(
 
 
 @router.post("/refresh-token")
+@limiter.limit("10/minute")
 def refresh_token(
+    request: Request,
     active_session=Depends(verify_session_guard),
     db: Session = Depends(get_db),
 ):
@@ -210,7 +212,9 @@ def refresh_token(
 
 
 @router.put("/update-password")
+@limiter.limit("5/minute")
 def update_password(
+    request: Request,
     payload: UpdatePasswordPayload,
     active_session=Depends(verify_session_guard),
     db: Session = Depends(get_db),
