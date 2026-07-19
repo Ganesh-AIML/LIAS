@@ -5,6 +5,8 @@ import {
   TrendingUp, Award, Search, X
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
+import CodingEvaluator from '../../../components/admin/CodingEvaluator';
+import SubjectiveEvaluator from '../../../components/admin/SubjectiveEvaluator';
 
 const exportToCsv = (students, testName) => {
   const headers = [

@@ -165,6 +165,15 @@ def _run_additive_migrations():
             db.rollback()
             logger.warning("evaluation columns migration skipped: %s", e)
 
+        # ── CODING PROBLEMS MARKS COLUMN (additive, backward compatible) ──
+        try:
+            db.execute(text("ALTER TABLE coding_problems ADD COLUMN IF NOT EXISTS marks INTEGER DEFAULT 10;"))
+            db.commit()
+            logger.info("✅ coding_problems.marks column ready.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("coding_problems.marks migration skipped: %s", e)
+
         # AUD-025: one-time sweep for students backfilled BEFORE this flag existed
         # (e.g. if AUD-024 already ran on this DB in a prior deploy). Anyone who
         # was never given a real password via the UI still has a placeholder hash
