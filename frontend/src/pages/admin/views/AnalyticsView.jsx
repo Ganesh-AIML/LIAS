@@ -1,11 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import QuestionRenderer from '../../../components/exam/QuestionRenderer';
-import AnswerRenderer from '../../../components/exam/AnswerRenderer';
-import CodingEvaluator from '../../../components/admin/CodingEvaluator';
-import SubjectiveEvaluator from '../../../components/admin/SubjectiveEvaluator';
 import {
   ArrowLeft, Users, CheckCircle, Target, Trophy,
-  BookOpen, Code2, BarChart2, Download,
+  BarChart2, Download, Code2, BookOpen,
   TrendingUp, Award, Search, X
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
@@ -33,16 +29,12 @@ const exportToCsv = (students, testName) => {
   document.body.removeChild(a);
 };
 
-const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
-  const [activeCodeTab, setActiveCodeTab] = useState(0);
+const StudentDetailModal = ({ student, onClose }) => {
   if (!student) return null;
-
-  const codingSubs = student.codingSubmissions || [];
-  const activeSub = codingSubs[activeCodeTab];
 
   return (
     <div className="fixed inset-0 z-[60] flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white w-full max-w-2xl h-full shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="bg-white w-full max-w-lg h-full shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white shrink-0">
           <div>
             <h2 className="text-xl font-black text-slate-900">{student.student_id}</h2>
@@ -68,75 +60,8 @@ const StudentDetailModal = ({ student, subjectiveQuestions = [], onClose }) => {
             <p className="text-xl font-black text-amber-900">{student.subjectiveScore}</p>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          {codingSubs.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <Code2 size={16} className="text-blue-600"/>
-                <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wider">Coding Submissions</h3>
-              </div>
-              {codingSubs.length > 0 ? (
-                <div className="flex flex-col gap-4">
-                  <div className="flex gap-2 overflow-x-auto bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                    {codingSubs.map((sub, idx) => (
-                      <button key={idx} onClick={() => setActiveCodeTab(idx)}
-                        className={`px-4 py-2 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${
-                          activeCodeTab === idx
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-white text-slate-600 hover:bg-slate-50 shadow-sm border border-slate-200'
-                        }`}>
-                        {sub.problemTitle}
-                        {!sub.isAttempted && <span className="text-red-400 ml-1.5 text-[10px] uppercase">Unattempted</span>}
-                      </button>
-                    ))}
-                  </div>
-                  {activeSub && (
-                    <div>
-                      {activeSub.isAttempted ? (
-                        <div className="border border-slate-200 rounded-xl overflow-hidden">
-                          <div className="bg-slate-800 p-4">
-                            <span className="text-xs font-bold text-slate-400 uppercase">Submission</span>
-                          </div>
-                          <pre className="p-6 bg-slate-900 text-emerald-500 font-mono text-sm overflow-x-auto max-h-[300px]">
-                            <code>{activeSub.submittedCode || "// Code unavailable"}</code>
-                          </pre>
-                        </div>
-                      ) : (
-                        <div className="p-8 text-center border border-slate-200 rounded-xl bg-slate-50">
-                          <Code2 size={28} className="text-slate-300 mx-auto mb-2" />
-                          <p className="text-slate-600 font-bold text-sm">Unattempted Problem</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl">
-                  <Code2 size={28} className="text-slate-300 mx-auto mb-2" />
-                  <p className="text-slate-400 text-sm font-medium">No coding submissions found.</p>
-                </div>
-              )}
-            </div>
-          )}
-          {subjectiveQuestions.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <BookOpen size={16} className="text-blue-600"/>
-                <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wider">Subjective Answers</h3>
-              </div>
-              {subjectiveQuestions.map((sq) => {
-                const answer = student.subjectiveAnswers?.[sq.id];
-                return (
-                  <div key={sq.id} className="border border-slate-200 rounded-xl p-4 space-y-2">
-                    <div className="text-sm font-bold text-slate-700">
-                      <QuestionRenderer text={sq.text} format={sq.content_format || 'plain'} />
-                    </div>
-                    {answer ? <AnswerRenderer markdown={answer} /> : <p className="text-slate-400 text-sm italic">No answer provided.</p>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex-1 overflow-y-auto p-6">
+          <p className="text-sm text-slate-400 text-center pt-8">Score summary for {student.student_id}.</p>
         </div>
       </div>
     </div>
@@ -320,7 +245,7 @@ export default function AnalyticsView({ test, onBack }) {
 
   return (
     <div className="space-y-5 pb-16">
-      <StudentDetailModal student={selectedStudentDetail} subjectiveQuestions={subjectiveQuestions} onClose={() => setSelectedStudentDetail(null)} />
+      <StudentDetailModal student={selectedStudentDetail} onClose={() => setSelectedStudentDetail(null)} />
 
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">

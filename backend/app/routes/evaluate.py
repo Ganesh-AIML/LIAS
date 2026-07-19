@@ -179,6 +179,7 @@ def get_evaluation_detail(
             "title": cp.title,
             "description": cp.description,
             "constraints": cp.constraints,
+            "max_marks": cp.marks or 10,
             "submitted_code": cp_data.get("code", ""),
             "language": cp_data.get("language_id", None),
             "is_attempted": bool(cp_data.get("code")),

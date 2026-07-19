@@ -2,6 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { evaluateApi } from '../../hooks/useEvaluateApi';
 import { Search, ChevronRight, Save, RotateCcw, Flag, Loader, AlertCircle } from 'lucide-react';
 
+const LANGUAGE_MAP = {
+  '62': 'Java',
+  '71': 'Python 3',
+  '54': 'C++',
+  '50': 'C',
+  '63': 'JavaScript',
+};
+
 export default function CodingEvaluator({ examId, onSave }) {
   const [students, setStudents] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -190,8 +198,9 @@ export default function CodingEvaluator({ examId, onSave }) {
               </div>
             ) : (detail.coding_details || []).map(cp => (
               <div key={cp.problem_id} className="border border-slate-200 rounded-xl overflow-hidden">
-                <div className="bg-slate-800 p-4">
+                <div className="bg-slate-800 p-4 flex items-center justify-between">
                   <h4 className="text-sm font-bold text-white">{cp.title}</h4>
+                  {cp.language && <span className="text-xs font-bold text-slate-300 bg-slate-700 px-2 py-0.5 rounded">{LANGUAGE_MAP[cp.language] || cp.language}</span>}
                 </div>
                 <div className="p-4 space-y-4">
                   {/* Problem statement */}
@@ -217,14 +226,14 @@ export default function CodingEvaluator({ examId, onSave }) {
                     <input
                       type="number"
                       min="0"
-                      max="100"
+                      max={cp.max_marks || 100}
                       step="0.5"
                       value={marks[cp.problem_id] ?? ''}
                       onChange={e => handleMarksChange(cp.problem_id, e.target.value)}
                       className="w-24 px-3 py-1.5 border border-slate-300 rounded-lg text-sm font-bold text-center focus:outline-none focus:border-blue-500"
                       placeholder="0"
                     />
-                    <span className="text-xs text-slate-400">/ max</span>
+                    <span className="text-xs text-slate-400">/ {cp.max_marks || 10}</span>
                   </div>
                 </div>
               </div>

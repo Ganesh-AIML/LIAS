@@ -417,7 +417,36 @@ export default function ScheduleTest({ initialData, onBack }) {
 
         {/* CODING */}
         {activeTab === "coding" && (
-          <CodingProblemBuilder problems={codingProblems} setProblems={setCodingProblems} />
+          <div className="space-y-4">
+            <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              <h2 className="text-base font-black text-slate-800 flex items-center gap-2">
+                <Code2 size={18} className="text-blue-600" /> Coding Challenges
+                <span className="text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 px-2 py-0.5 rounded-full">{codingProblems.length}</span>
+              </h2>
+              <div className="flex gap-2">
+                <TexZipImporter
+                  onImport={handleTexImport}
+                  className="inline-flex"
+                />
+                <button
+                  onClick={() => setCodingProblems(prev => [...prev, { id: `cp_${Math.random().toString(36).substr(2, 9)}`, title: '', description: '', constraints: '', languages: '71,54,62,50', marks: 10, testCases: [] }])}
+                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm"
+                >
+                  <Plus size={15} /> Add Problem
+                </button>
+              </div>
+            </div>
+
+            {codingProblems.length === 0 && (
+              <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-16 text-center">
+                <Code2 size={32} className="text-slate-200 mx-auto mb-3" />
+                <p className="text-slate-500 font-bold">No coding problems yet.</p>
+                <p className="text-slate-400 text-sm mt-1">Add manually or import a TEX ZIP file.</p>
+              </div>
+            )}
+
+            <CodingProblemBuilder problems={codingProblems} setProblems={setCodingProblems} />
+          </div>
         )}
 
         {/* SUBJECTIVE */}

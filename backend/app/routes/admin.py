@@ -107,6 +107,7 @@ class CodingProblemPayload(BaseModel):
     description: str
     constraints: Optional[str] = ""
     languages: str
+    marks: int = 10
     testCases: List[TestCasePayload] = []
 
 class SectionPayload(BaseModel):
@@ -255,7 +256,8 @@ def create_exam(
                 title       = cp.title,
                 description = cp.description,
                 constraints = cp.constraints,
-                languages   = cp.languages
+                languages   = cp.languages,
+                marks       = cp.marks
             )
             db.add(new_cp)
 
@@ -370,7 +372,8 @@ def update_exam(
             cp_id = f"cp_{exam_id}_{p_idx}_{uuid.uuid4().hex[:6]}"
             new_cp = CodingProblem(
                 id=cp_id, exam_id=exam_id, title=cp.title,
-                description=cp.description, constraints=cp.constraints, languages=cp.languages
+                description=cp.description, constraints=cp.constraints,
+                languages=cp.languages, marks=cp.marks
             )
             db.add(new_cp)
 

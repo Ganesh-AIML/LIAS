@@ -131,6 +131,7 @@ class CodingProblem(Base):
     constraints = Column(Text, nullable=True)
     # Store languages as a comma-separated string (e.g., "62,71,54" for Java, Python, C++)
     languages   = Column(String, nullable=True) 
+    marks       = Column(Integer, default=10)   # max marks for manual evaluation
     
     exam       = relationship("Exam", back_populates="coding_problems")
     test_cases = relationship("TestCase", back_populates="problem", cascade="all, delete-orphan")
