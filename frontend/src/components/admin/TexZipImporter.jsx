@@ -388,6 +388,12 @@ function parseQuestionBody(rawBody, type, imagesMap, questionLabel, errors) {
     // \answer{X} sometimes placed inside \choices
     const inChoiceAns = /\\answer\{([A-Da-d])\}/.exec(choicesEnv.body);
     if (inChoiceAns) answer = inChoiceAns[1].toUpperCase();
+    // \answer{X} sometimes placed after \end{choices}
+    if (!answer) {
+      const afterChoices = rawBody.slice(choicesEnv.matchEnd);
+      const afterMatch = /\\answer\{([A-Da-d])\}/.exec(afterChoices);
+      if (afterMatch) answer = afterMatch[1].toUpperCase();
+    }
   }
   for (const k of OPTION_KEYS) {
     if (!opts[k]) errors.push({ location: questionLabel, message: `Missing option ${k}.` });
