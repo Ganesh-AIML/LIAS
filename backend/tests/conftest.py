@@ -20,13 +20,15 @@ os.environ["DB_ENCRYPTION_KEY"] = "wIAgy-gUwS1wSaQAKOeC4RcmO4zsJuPx780uRyWxMeU="
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 
 import pytest
+import bcrypt
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
 from app.database import Base, get_db
 from app.main import fastapi_app
-from app.models import Student, TokenRegistry, Exam, ExamSession
+from app.models import Student, TokenRegistry, Exam, ExamSession, StaffAccount
+from app.auth import create_staff_jwt
 from app.limiter import limiter
 
 TEST_DATABASE_URL = f"sqlite:///{_db_path}"
@@ -120,3 +122,95 @@ def sample_token(db, sample_exam, sample_student):
     db.add(token)
     db.commit()
     return token
+
+
+# ── STAFF AUTH FIXTURES (module-based authorization) ──────────────────────────
+
+def _staff_hash(password: str = "test1234") -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+@pytest.fixture
+def admin_headers():
+    """Legacy X-Admin-Token header (valid during the bootstrap window)."""
+    return {"X-Admin-Token": os.environ["ADMIN_SECRET"]}
+
+
+@pytest.fixture
+def admin_staff(db):
+    staff = StaffAccount(
+        id="staff_admin_test",
+        name="Test Admin",
+        email="admin@test.local",
+        password_hash=_staff_hash(),
+        role="admin",
+        module=None,
+    )
+    db.add(staff)
+    db.commit()
+    return staff
+
+
+@pytest.fixture
+def admin_bearer_headers(admin_staff):
+    return {"Authorization": f"Bearer {create_staff_jwt(admin_staff.id)}"}
+
+
+@pytest.fixture
+def faculty_staff(db):
+    staff = StaffAccount(
+        id="staff_faculty_test",
+        name="Test Faculty",
+        email="faculty@test.local",
+        password_hash=_staff_hash(),
+        role="faculty",
+        module="AIML",
+    )
+    db.add(staff)
+    db.commit()
+    return staff
+
+
+@pytest.fixture
+def faculty_bearer_headers(faculty_staff):
+    return {"Authorization": f"Bearer {create_staff_jwt(faculty_staff.id)}"}
+
+
+@pytest.fixture
+def other_faculty_staff(db):
+    staff = StaffAccount(
+        id="staff_faculty_other",
+        name="Other Faculty",
+        email="other@test.local",
+        password_hash=_staff_hash(),
+        role="faculty",
+        module="CS",
+    )
+    db.add(staff)
+    db.commit()
+    return staff
+
+
+@pytest.fixture
+def other_faculty_bearer_headers(other_faculty_staff):
+    return {"Authorization": f"Bearer {create_staff_jwt(other_faculty_staff.id)}"}
+
+
+@pytest.fixture
+def pending_faculty_staff(db):
+    staff = StaffAccount(
+        id="staff_faculty_pending",
+        name="Pending Faculty",
+        email="pending@test.local",
+        password_hash=_staff_hash(),
+        role="faculty",
+        module=None,
+    )
+    db.add(staff)
+    db.commit()
+    return staff
+
+
+@pytest.fixture
+def pending_faculty_bearer_headers(pending_faculty_staff):
+    return {"Authorization": f"Bearer {create_staff_jwt(pending_faculty_staff.id)}"}

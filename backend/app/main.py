@@ -1,7 +1,9 @@
 import os
+import time
+import uuid
 import logging
 import socketio
-from app.routes import auth, exam, admin as admin_routes, evaluate as evaluate_routes
+from app.routes import auth, exam, admin as admin_routes, evaluate as evaluate_routes, staff_auth as staff_auth_routes
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -47,6 +49,7 @@ async def lifespan(app):
         except Exception:
             db.rollback()
     _run_additive_migrations()
+    _seed_admin_if_needed()
     yield
 
 fastapi_app = FastAPI(title="S.C.O.P.E. Assessment Gateway", version="2.0.0", lifespan=lifespan)
@@ -66,6 +69,48 @@ fastapi_app.include_router(auth.router,          prefix="/auth",   tags=["Auth"]
 fastapi_app.include_router(exam.router,          prefix="/exam",   tags=["Exam"])
 fastapi_app.include_router(admin_routes.router,  prefix="/admin",  tags=["Admin"])
 fastapi_app.include_router(evaluate_routes.router, prefix="/admin", tags=["Admin"])
+fastapi_app.include_router(staff_auth_routes.router, prefix="/admin", tags=["Admin"])
+
+def _seed_admin_if_needed():
+    """Seed the first admin account from ADMIN_EMAIL/ADMIN_PASSWORD env vars.
+
+    Runs ONLY when zero admin accounts exist in staff_accounts — otherwise the
+    seed is skipped entirely. Until this seed runs, the legacy X-Admin-Token
+    (ADMIN_SECRET) bootstrap window stays open in verify_admin, so an existing
+    deploy can never lock itself out.
+    """
+    admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_email or not admin_password:
+        return
+    with SessionLocal() as db:
+        try:
+            existing = db.execute(
+                text("SELECT COUNT(*) FROM staff_accounts WHERE role = 'admin'")
+            ).scalar()
+            if existing and int(existing) > 0:
+                return
+            import bcrypt as _bcrypt
+            password_hash = _bcrypt.hashpw(
+                admin_password.encode("utf-8"), _bcrypt.gensalt(rounds=12)
+            ).decode("utf-8")
+            db.execute(
+                text("""
+                    INSERT INTO staff_accounts (id, name, email, password_hash, role, module, created_at)
+                    VALUES (:id, NULL, :email, :hash, 'admin', NULL, :ts)
+                """),
+                {
+                    "id": f"staff_{uuid.uuid4().hex[:8]}",
+                    "email": admin_email,
+                    "hash": password_hash,
+                    "ts": time.time(),
+                },
+            )
+            db.commit()
+            logger.info("✅ Seeded admin account for %s", admin_email)
+        except Exception as e:
+            db.rollback()
+            logger.warning("Admin seed skipped: %s", e)
 
 def _run_additive_migrations():
     with SessionLocal() as db:
@@ -173,6 +218,17 @@ def _run_additive_migrations():
         except Exception as e:
             db.rollback()
             logger.warning("coding_problems.marks migration skipped: %s", e)
+
+        # ── EXAMS MODULE COLUMN (additive; module-based authorization) ──
+        # Existing exams get module=NULL -> visible to admins only until an
+        # admin assigns the exam to a module.
+        try:
+            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS module VARCHAR;"))
+            db.commit()
+            logger.info("✅ exams.module column ready.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("exams.module migration skipped: %s", e)
 
         # AUD-025: one-time sweep for students backfilled BEFORE this flag existed
         # (e.g. if AUD-024 already ran on this DB in a prior deploy). Anyone who

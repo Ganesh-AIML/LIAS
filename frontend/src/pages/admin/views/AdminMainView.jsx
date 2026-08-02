@@ -7,6 +7,10 @@ import { adminApi } from '../../../hooks/useAdminApi';
 import { useTrueTime } from '../../../hooks/useTrueTime';
 import LiveCountdown from '../../../components/ui/LiveCountdown';
 
+const moduleBadge = (module) => module ? (
+  <span className="inline-flex items-center text-[10px] font-black uppercase text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">{module}</span>
+) : null;
+
 export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonitorLive, onViewUpcoming, onViewAnalytics }) {
   const { ts } = useTrueTime();
   const [exams, setExams] = useState([]);
@@ -118,7 +122,10 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
               <div key={test.id} className="bg-white border-2 border-red-100 rounded-2xl p-5 shadow-[0_4px_20px_-4px_rgba(239,68,68,0.1)] relative overflow-hidden group flex flex-col">
 <div className="absolute top-0 right-0 bg-red-50 text-red-600 text-[10px] font-black uppercase px-3 py-1 rounded-bl-lg tracking-widest flex items-center gap-1 z-10">Live Now</div>
 <div className="flex justify-between items-start mb-4 pt-4 relative z-10">
-                  <h3 className="font-black text-lg text-slate-900 pr-12 truncate">{test.title}</h3>
+                  <div className="pr-12">
+                    <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
+                    <div className="mt-1">{moduleBadge(test.module)}</div>
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-blue-700 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                     <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
@@ -160,7 +167,10 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
             {upcomingTests.map(test => (
               <div key={test.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col">
                 <div className="flex justify-between items-start mb-4">
-                  <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
+                  <div className="pr-12">
+                    <h3 className="font-black text-lg text-slate-900 truncate">{test.title}</h3>
+                    <div className="mt-1">{moduleBadge(test.module)}</div>
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={() => handleCopyLink(test.id)} className="text-slate-400 hover:text-blue-700 transition-colors" title="Copy Student Link"><Link size={18}/></button>
                     <button onClick={() => setExamToDelete(test)} className="text-slate-400 hover:text-red-600 transition-colors" title="Delete Exam"><Trash2 size={18}/></button>
@@ -224,7 +234,7 @@ export default function AdminMainView({ onScheduleClick, onResumeDraft, onMonito
               <tbody className="divide-y divide-slate-100">
                 {pastTests.map(test => (
                   <tr key={test.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-900">{test.title}</td>
+                    <td className="px-6 py-4 font-bold text-slate-900">{test.title}<div className="mt-0.5">{moduleBadge(test.module)}</div></td>
                     <td className="px-6 py-4 text-slate-600 font-medium">{new Date(test.starts_at_ms).toLocaleDateString()}</td>
                     <td className="px-6 py-4 text-center text-slate-700 font-semibold">{test.participants || 0}</td>
                     <td className="px-6 py-4 text-right flex justify-end gap-2">

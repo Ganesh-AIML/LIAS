@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import TexZipImporter from "../../../components/admin/TexZipImporter";
 import {
   ArrowLeft,
@@ -12,9 +12,11 @@ import {
   CheckCircle2,
   BookOpen,
   AlertCircle,
+  BookMarked,
 } from "lucide-react";
 import CodingProblemBuilder from "./CodingProblemBuilder";
 import { adminApi } from "../../../hooks/useAdminApi";
+import { getStaffSession } from "../AuthPage";
 
 const generateId = () => `mcq_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -75,6 +77,18 @@ export default function ScheduleTest({ initialData, onBack }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  const staff = getStaffSession();
+  const isFaculty = staff?.role === 'faculty';
+  const [moduleOptions, setModuleOptions] = useState([]);
+
+  // Admins can pick from existing modules (free-text allowed via datalist).
+  useEffect(() => {
+    if (isFaculty) return;
+    adminApi.get('/admin/modules')
+      .then(res => { if (res.success) setModuleOptions(res.data); })
+      .catch(() => {});
+  }, [isFaculty]);
+
   const formatTimeForInput = (ms) =>
     ms
       ? new Date(ms - new Date().getTimezoneOffset() * 60000)
@@ -93,6 +107,7 @@ export default function ScheduleTest({ initialData, onBack }) {
     qna_duration_minutes: initialData?.qna_duration_minutes || "",
     start_password: initialData?.start_password_hash || "",
     end_password: initialData?.end_password_hash || "",
+    module: isFaculty ? (staff?.module || initialData?.module || "") : (initialData?.module || ""),
   });
 
   const [subjectiveQuestions, setSubjectiveQuestions] = useState(initialData?.subjective_questions || []);
@@ -164,6 +179,7 @@ export default function ScheduleTest({ initialData, onBack }) {
         qna_duration_minutes: testMeta.qna_duration_minutes ? parseInt(testMeta.qna_duration_minutes) : null,
         starts_at: new Date(testMeta.starts_at).getTime(),
         status: status,
+        module: isFaculty ? (staff?.module || null) : (testMeta.module?.trim() || null),
         questions: questions,
         coding_problems: codingProblems,
         subjective_questions: subjectiveQuestions,
@@ -243,6 +259,33 @@ export default function ScheduleTest({ initialData, onBack }) {
                 placeholder="e.g. Campus Recruitment Drive 2025"
               />
             </div>
+
+            {/* MODULE (admin picks; faculty fixed to their module) */}
+            {isFaculty ? (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Module</label>
+                <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+                  <BookMarked size={16} className="text-blue-700" />
+                  <span className="text-sm font-black text-blue-900">{staff?.module || 'No module assigned'}</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-semibold mt-1.5">Exams are automatically assigned to your module.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Module <span className="text-slate-300 normal-case font-medium">optional</span></label>
+                <input
+                  type="text"
+                  list="schedule-module-options"
+                  value={testMeta.module}
+                  onChange={(e) => setTestMeta({ ...testMeta, module: e.target.value })}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold text-slate-900"
+                  placeholder="e.g. AIML — exams without a module are admin-only"
+                />
+                <datalist id="schedule-module-options">
+                  {moduleOptions.map(m => <option key={m} value={m} />)}
+                </datalist>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Start Date & Time *</label>

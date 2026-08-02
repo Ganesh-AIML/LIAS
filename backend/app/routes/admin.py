@@ -13,8 +13,10 @@ from sqlalchemy import func
 from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
 from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student, StaffAccount
+from app.auth import decode_staff_jwt
 from app.limiter import limiter
+from app.routes.staff_auth import ModuleAssignPayload
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
 if not ENCRYPTION_KEY:
@@ -63,22 +65,94 @@ def dedupe_sessions_per_student(sessions):
     return list(best.values())
 
 # ── AUTH GUARD ─────────────────────────────────────────────────────────────────
-def verify_admin(x_admin_token: str = Header(None)):
+def verify_admin(
+    authorization: Optional[str] = Header(None),
+    x_admin_token: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Resolve the authenticated staff account.
+
+    Returns a dict {id, role, module, name, email}.
+
+    1. PRIMARY: `Authorization: Bearer <staff JWT>` — the account is loaded from
+       staff_accounts on every request, so role/module changes (or deactivation)
+       apply immediately. A present-but-invalid staff JWT is an outright 401.
+    2. LEGACY BOOTSTRAP: `X-Admin-Token` == ADMIN_SECRET is accepted ONLY while
+       zero admin accounts exist (pre-seed window), so an existing deployment
+       can never lock itself out. Once the first admin is seeded it is rejected.
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        payload = decode_staff_jwt(authorization[7:].strip())
+        if payload:
+            staff = (
+                db.query(StaffAccount)
+                .filter(StaffAccount.id == payload.get("sub"))
+                .first()
+            )
+            if staff:
+                return {
+                    "id": staff.id,
+                    "role": staff.role,
+                    "module": staff.module,
+                    "name": staff.name,
+                    "email": staff.email,
+                }
+        raise HTTPException(status_code=401, detail="Unauthorized.")
+
+    admin_count = (
+        db.query(StaffAccount).filter(StaffAccount.role == "admin").count()
+    )
     if (
-        not ADMIN_SECRET
-        or not x_admin_token
-        or not secrets.compare_digest(x_admin_token, ADMIN_SECRET)
+        admin_count == 0
+        and ADMIN_SECRET
+        and x_admin_token
+        and secrets.compare_digest(x_admin_token, ADMIN_SECRET)
     ):
+        return {"id": None, "role": "admin", "module": None, "name": "Admin", "email": None}
+
+    raise HTTPException(status_code=403, detail="Unauthorized.")
+
+
+def require_admin(staff: dict):
+    """Only role='admin' passes. Faculty (even module-assigned) is 403."""
+    if staff.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def require_exam_scope(staff: dict, exam):
+    """Module-based authorization gate for exam-scoped resources.
+
+    - admin  -> allowed unconditionally.
+    - faculty -> allowed only if a module is assigned AND exam.module matches.
+    - exam=None (orphan rows) -> denied for faculty.
+    """
+    if staff.get("role") == "admin":
+        return
+    if staff.get("role") != "faculty":
         raise HTTPException(status_code=403, detail="Unauthorized.")
-    return True
+    module = staff.get("module")
+    if not module:
+        raise HTTPException(
+            status_code=403,
+            detail="No module assigned. Contact an administrator.",
+        )
+    if exam is None or exam.module != module:
+        raise HTTPException(status_code=403, detail="Unauthorized.")
 
 
 # ── LOGIN VERIFICATION ─────────────────────────────────────────────────────────
 @router.get("/verify")
 @limiter.limit("20/minute")  # AUD-008: rate-limit admin token verification
-def verify_admin_login(request: Request, _: bool = Depends(verify_admin)):
-    """Explicit endpoint used by the frontend to validate the X-Admin-Token."""
-    return {"success": True, "message": "Admin verified"}
+def verify_admin_login(request: Request, staff: dict = Depends(verify_admin)):
+    """Explicit endpoint used by the frontend to validate the session token."""
+    return {
+        "success": True,
+        "message": "Admin verified",
+        "role": staff["role"],
+        "module": staff["module"],
+        "name": staff["name"],
+        "email": staff["email"],
+    }
 
 
 
@@ -146,6 +220,7 @@ class ExamCreatePayload(BaseModel):
     status:              str            = "upcoming"
     start_password_changed: Optional[bool] = None
     end_password_changed: Optional[bool] = None
+    module:              Optional[str]  = None  # module name; ignored for faculty (forced to their module)
     questions:           List[QuestionPayload] = []
     coding_problems:     List[CodingProblemPayload] = []
     subjective_questions: List[SubjectiveQuestionPayload] = []
@@ -159,6 +234,16 @@ class ExamCreatePayload(BaseModel):
         if len(v) > 500:
             raise ValueError("Exam title too long (max 500 characters).")
         return v.strip()
+
+    @field_validator("module")
+    @classmethod
+    def module_not_too_long(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 100:
+            raise ValueError("Module name too long (max 100 characters).")
+        return v or None
 
     @field_validator("duration_minutes")
     @classmethod
@@ -181,6 +266,20 @@ class ExamCreatePayload(BaseModel):
             raise ValueError("End password too long (max 128 characters).")
         return v
 
+def resolve_exam_module(staff: dict, payload) -> Optional[str]:
+    """Faculty are forced to their own module (payload.module is NEVER trusted
+    from a faculty account). Admins may set any module or none."""
+    if staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            raise HTTPException(
+                status_code=403,
+                detail="No module assigned. Contact an administrator.",
+            )
+        return module
+    return payload.module
+
+
 # ── UPDATED POST ROUTE: CREATE EXAM WITH ALL CONTENT ──────────────────────────
 
 @router.post("/exams")
@@ -188,12 +287,14 @@ class ExamCreatePayload(BaseModel):
 def create_exam(
     request: Request,
     payload: ExamCreatePayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
     Creates an exam along with all its MCQs, Coding Problems, and Test Cases atomically.
     """
+    exam_module = resolve_exam_module(staff, payload)
+
     try:
         exam_id = f"exam_{uuid.uuid4().hex[:8]}"
 
@@ -214,6 +315,7 @@ def create_exam(
             coding_duration_minutes=payload.coding_duration_minutes or None,
             mcq_duration_minutes=payload.mcq_duration_minutes or None,
             qna_duration_minutes=payload.qna_duration_minutes or None,
+            module=exam_module,
         )
         db.add(new_exam)
 
@@ -300,26 +402,29 @@ def update_exam(
     request: Request,
     exam_id: str,
     payload: ExamCreatePayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
     Updates an existing draft exam. 
     It atomically purges old questions/problems and replaces them with the new payload.
     """
-    try:
-        exam = db.query(Exam).filter(Exam.id == exam_id).first()
-        if not exam:
-            raise HTTPException(status_code=404, detail="Exam not found.")
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
 
-        if exam.status not in ("draft", "upcoming"):
-            # AUD-021: purging/replacing questions on a live or completed exam
-            # destroys the mapping between already-submitted answers (keyed by
-            # old question IDs) and the new question set.
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot edit a live or completed exam. Questions are locked once an exam goes live.",
-            )
+    require_exam_scope(staff, exam)
+
+    if exam.status not in ("draft", "upcoming"):
+        # AUD-021: purging/replacing questions on a live or completed exam
+        # destroys the mapping between already-submitted answers (keyed by
+        # old question IDs) and the new question set.
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot edit a live or completed exam. Questions are locked once an exam goes live.",
+        )
+
+    try:
 
         # 1. Update Meta
         exam.title = payload.title
@@ -329,6 +434,13 @@ def update_exam(
         exam.qna_duration_minutes = payload.qna_duration_minutes or None
         exam.starts_at = payload.starts_at / 1000.0
         exam.status = payload.status
+        if staff.get("role") == "faculty":
+            # Server-enforced: a faculty member can never move an exam out of
+            # their module (payload.module is never trusted from faculty).
+            exam.module = resolve_exam_module(staff, payload)
+        elif "module" in payload.model_fields_set:
+            exam.module = payload.module
+        # payload.module omitted -> preserve the exam's existing module.
 
         if payload.start_password_changed is not False and payload.start_password:
             exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
@@ -411,7 +523,7 @@ def get_exam_analytics(
     exam_id: str,
     limit: Optional[int] = None,
     offset: int = 0,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -426,6 +538,8 @@ def get_exam_analytics(
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     # 1. Fetch Master Data
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
@@ -561,15 +675,22 @@ def get_exam_analytics(
 
 @router.get("/exams/active")
 def list_active_exams(
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
     Returns only upcoming and live exams.
     Used by Test Credentials tab to show assignable exams.
     Completed and draft exams are excluded.
+    Faculty only see exams in their assigned module.
     """
     exams = db.query(Exam).all()
+    if staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            return {"success": True, "data": []}
+        exams = [e for e in exams if e.module == module]
+
     now = time.time()
     result = []
 
@@ -584,6 +705,7 @@ def list_active_exams(
             "duration_minutes": exam.duration_seconds // 60,
             "starts_at_ms":     exam.starts_at * 1000,
             "status":           computed_status,
+            "module":           exam.module,
         })
 
     return {"success": True, "data": result}
@@ -591,9 +713,11 @@ def list_active_exams(
 
 # ── 1. GET FULL EXAM DETAILS (For Preview Mode) ─────────────────────────────────
 @router.get("/exams/{exam_id}")
-def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def get_exam_full(exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam: raise HTTPException(status_code=404)
+
+    require_exam_scope(staff, exam)
     
     qs = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
     cps = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
@@ -607,6 +731,7 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
         "coding_duration_minutes": exam.coding_duration_minutes,
         "mcq_duration_minutes": exam.mcq_duration_minutes,
         "qna_duration_minutes": exam.qna_duration_minutes,
+        "module": exam.module,
         "sections": [{"id": s.id, "name": s.name, "type": s.type, "marks_per_question": s.marks_per_question, "order_index": s.order_index} for s in secs],
         "questions": [{"id": q.id, "section": q.section, "text": q.text, "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans, "section_id": q.section_id, "order_index": q.order_index, "marks": q.marks, "content_format": q.content_format} for q in qs],
         "coding_problems": [{"id": cp.id, "title": cp.title, "description": cp.description, "constraints": cp.constraints} for cp in cps],
@@ -614,7 +739,13 @@ def get_exam_full(exam_id: str, _: bool = Depends(verify_admin), db: Session = D
     }}
 
 @router.get("/exams/{exam_id}/monitor")
-def get_live_monitor(exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def get_live_monitor(exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
+
     enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
     all_sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id).all()
     sessions = dedupe_sessions_per_student(all_sessions)
@@ -664,7 +795,7 @@ class RevokePayload(BaseModel):
 
 @router.post("/sessions/revoke")
 @limiter.limit("10/minute")
-def revoke_session(request: Request, payload: RevokePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def revoke_session(request: Request, payload: RevokePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
     """
     Force-terminate a student's session (admin kick-out button).
 
@@ -680,6 +811,8 @@ def revoke_session(request: Request, payload: RevokePayload, _: bool = Depends(v
     """
     session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
     if session:
+        exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+        require_exam_scope(staff, exam)
         session.is_revoked = True
         session.is_submitted = True
         db.commit()
@@ -698,10 +831,12 @@ class GrantPayload(BaseModel):
 
 @router.post("/sessions/grant")
 @limiter.limit("10/minute")
-def grant_session(request: Request, payload: GrantPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def grant_session(request: Request, payload: GrantPayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
     """Unlock a student whose session was revoked due to violations. Preserves all exam state."""
     session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
     if session:
+        exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+        require_exam_scope(staff, exam)
         session.is_revoked = False
         db.commit()
     return {"success": True}
@@ -758,11 +893,19 @@ class BulkDeletePayload(BaseModel):
 
 @router.post("/students/bulk-delete")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def bulk_delete_students(request: Request, payload: BulkDeletePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def bulk_delete_students(request: Request, payload: BulkDeletePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
     """High-Performance route to delete multiple students at once."""
     if payload.tokens:
+        if staff.get("role") == "faculty":
+            records = db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens)).all()
+            for r in records:
+                exam = db.query(Exam).filter(Exam.id == r.exam_id).first()
+                require_exam_scope(staff, exam)
         query = db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens))
         if payload.exam_id:
+            if staff.get("role") == "faculty":
+                exam = db.query(Exam).filter(Exam.id == payload.exam_id).first()
+                require_exam_scope(staff, exam)
             query = query.filter(TokenRegistry.exam_id == payload.exam_id)
         query.delete(synchronize_session=False)
         db.commit()
@@ -772,14 +915,28 @@ def bulk_delete_students(request: Request, payload: BulkDeletePayload, _: bool =
 @router.get("/students")
 def list_students(
     exam_id: Optional[str] = None,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
-    """Fetch all students. Includes root-level schema self-healing."""
+    """Fetch all students. Includes root-level schema self-healing.
 
+    Faculty without an exam_id filter only see enrollments in their module's
+    exams; a pending faculty (no module) sees an empty list.
+    """
     query = db.query(TokenRegistry)
     if exam_id:
+        if staff.get("role") == "faculty":
+            exam = db.query(Exam).filter(Exam.id == exam_id).first()
+            require_exam_scope(staff, exam)
         query = query.filter(TokenRegistry.exam_id == exam_id)
+    elif staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            return {"success": True, "data": []}
+        module_exam_ids = [e.id for e in db.query(Exam.id).filter(Exam.module == module).all()]
+        if not module_exam_ids:
+            return {"success": True, "data": []}
+        query = query.filter(TokenRegistry.exam_id.in_(module_exam_ids))
     records = query.all()
 
     if not records:
@@ -816,7 +973,19 @@ def list_students(
 # ── POST STUDENTS (Fortified with Upsert Logic to prevent duplicates) ──────────
 @router.post("/students")
 @limiter.limit("10/minute")
-def create_students(request: Request, payload: StudentsBulkPayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def create_students(request: Request, payload: StudentsBulkPayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+
+    if staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            raise HTTPException(
+                status_code=403,
+                detail="No module assigned. Contact an administrator.",
+            )
+        exam_ids = {s.exam_id for s in payload.students}
+        exams = {e.id: e for e in db.query(Exam).filter(Exam.id.in_(exam_ids)).all()}
+        for eid in exam_ids:
+            require_exam_scope(staff, exams.get(eid))
 
     for s in payload.students:
         # 🚀 ROOT FIX 2: Upsert Logic (Check if student already exists for this exam)
@@ -848,9 +1017,11 @@ class StudentUpdatePayload(BaseModel):
 
 @router.put("/students/{token}")
 @limiter.limit("10/minute")
-def update_student(request: Request, token: str, payload: StudentUpdatePayload, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def update_student(request: Request, token: str, payload: StudentUpdatePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
     record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
     if not record: raise HTTPException(status_code=404)
+    exam = db.query(Exam).filter(Exam.id == record.exam_id).first()
+    require_exam_scope(staff, exam)
     record.is_active = payload.is_active
     if payload.password:
         record.password_hash = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
@@ -859,8 +1030,12 @@ def update_student(request: Request, token: str, payload: StudentUpdatePayload, 
 
 @router.delete("/students/{token}")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def delete_student(request: Request, token: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
-    db.query(TokenRegistry).filter(TokenRegistry.token == token).delete()
+def delete_student(request: Request, token: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+    record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
+    if not record: raise HTTPException(status_code=404)
+    exam = db.query(Exam).filter(Exam.id == record.exam_id).first()
+    require_exam_scope(staff, exam)
+    db.delete(record)
     db.commit()
     return {"success": True}
 
@@ -868,10 +1043,15 @@ def delete_student(request: Request, token: str, _: bool = Depends(verify_admin)
 def list_exams(
     limit: Optional[int] = None,
     offset: int = 0,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     query = db.query(Exam).order_by(Exam.starts_at.desc())
+    if staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            return {"success": True, "data": [], "total": 0, "limit": limit, "offset": offset}
+        query = query.filter(Exam.module == module)
     total = query.count()
     if limit is not None:
         query = query.limit(limit).offset(offset)
@@ -907,14 +1087,22 @@ def list_exams(
             "id": exam.id, "title": exam.title, "duration_minutes": exam.duration_seconds // 60,
             "starts_at_ms": exam.starts_at * 1000, "status": computed_status,
             "participants": stats["total"], "submitted": stats["submitted"],
-            "start_password": dec_start, "end_password": dec_end 
+            "start_password": dec_start, "end_password": dec_end,
+            "module": exam.module
         })
     return {"success": True, "data": result, "total": total, "limit": limit, "offset": offset}
 
 @router.delete("/exams/{exam_id}")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def delete_exam(request: Request, exam_id: str, _: bool = Depends(verify_admin), db: Session = Depends(get_db)):
+def delete_exam(request: Request, exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
+
     try:
+
         # 1. Clean up violation logs attached to this exam's sessions
         session_ids = [s.id for s in db.query(ExamSession.id).filter(ExamSession.exam_id == exam_id).all()]
         if session_ids:
@@ -985,7 +1173,7 @@ class MasterStudentsBulkPayload(BaseModel):
 def list_master_students(
     limit: Optional[int] = None,
     offset: int = 0,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -998,6 +1186,9 @@ def list_master_students(
     intact. This is a display-only filter for the Master Directory UI, so we
     do it here (backend) rather than shipping every stale enrollment to the
     frontend just to hide it there.
+
+    Faculty: the Master Directory itself stays global (read-only for faculty),
+    but enrollments are filtered down to the faculty member's module exams.
     """
     query = db.query(Student).order_by(Student.created_at.desc())
     total = query.count()
@@ -1013,6 +1204,16 @@ def list_master_students(
         exam.id: compute_exam_status(exam, now) for exam in db.query(Exam).all()
     }
 
+    if staff.get("role") == "faculty":
+        module = staff.get("module")
+        if not module:
+            return {"success": True, "data": [], "total": total, "limit": limit, "offset": offset}
+        allowed_exam_ids = {
+            e.id for e in db.query(Exam).filter(Exam.module == module).all()
+        }
+    else:
+        allowed_exam_ids = None
+
     enrollments = (
         db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token)
         .filter(TokenRegistry.student_id.in_(student_ids))
@@ -1020,6 +1221,8 @@ def list_master_students(
     )
     enrollment_map: dict[str, list] = {}
     for e in enrollments:
+        if allowed_exam_ids is not None and e.exam_id not in allowed_exam_ids:
+            continue
         status_end = exam_status_map.get(e.exam_id)
         if status_end is not None:
             computed_status, end_at = status_end
@@ -1050,10 +1253,11 @@ def list_master_students(
 def create_master_student(
     request: Request,
     payload: MasterStudentCreatePayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """Add a student to the Master Directory. Fails if student_id already exists."""
+    require_admin(staff)
     existing = db.query(Student).filter(Student.id == payload.id).first()
     if existing:
         raise HTTPException(status_code=409, detail=f"Student '{payload.id}' already exists.")
@@ -1076,7 +1280,7 @@ def create_master_student(
 def bulk_create_master_students(
     request: Request,
     payload: MasterStudentsBulkPayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -1089,6 +1293,7 @@ def bulk_create_master_students(
       wipe existing real passwords back to blank).
     Returns counts so the UI can show created/updated, matching assign_students_to_exam's shape.
     """
+    require_admin(staff)
     created = 0
     updated = 0
 
@@ -1126,10 +1331,11 @@ def update_master_student(
     request: Request,
     student_id: str,
     payload: MasterStudentUpdatePayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """Edit name, password, or active status of a master student."""
+    require_admin(staff)
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
@@ -1168,7 +1374,7 @@ def reset_and_resync_student(
     request: Request,
     student_id: str,
     payload: ResetAndResyncPayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -1178,6 +1384,7 @@ def reset_and_resync_student(
        this student, across all exams — so existing assignments don't need a
        manual re-assign to pick up the fix.
     """
+    require_admin(staff)
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
@@ -1205,13 +1412,14 @@ def reset_and_resync_student(
 def delete_master_student(
     request: Request,
     student_id: str,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
     Remove student from Master Directory.
     Does NOT delete TokenRegistry rows — enrollment history preserved for audit.
     """
+    require_admin(staff)
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
@@ -1245,7 +1453,7 @@ def assign_students_to_exam(
     request: Request,
     exam_id: str,
     payload: AssignStudentsPayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -1262,6 +1470,8 @@ def assign_students_to_exam(
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     students = db.query(Student).filter(Student.id.in_(payload.student_ids)).all()
     found_ids = {s.id for s in students}
@@ -1304,3 +1514,61 @@ def assign_students_to_exam(
         "skipped": skipped,
         "needs_reset": needs_reset,
     }
+
+
+# ── STAFF MANAGEMENT (admin-only) ──────────────────────────────────────────────
+
+@router.get("/staff")
+def list_staff(staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+    """List all admin/faculty accounts (no password hashes, ever)."""
+    require_admin(staff)
+    rows = db.query(StaffAccount).order_by(StaffAccount.created_at.asc()).all()
+    return {"success": True, "data": [
+        {
+            "id": s.id,
+            "name": s.name,
+            "email": s.email,
+            "role": s.role,
+            "module": s.module,
+            "created_at": s.created_at,
+        }
+        for s in rows
+    ]}
+
+
+@router.put("/staff/{staff_id}")
+@limiter.limit("10/minute")
+def assign_staff_module(
+    request: Request,
+    staff_id: str,
+    payload: ModuleAssignPayload,
+    staff: dict = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Assign/reassign/clear (null) a faculty account's module. Admin-only."""
+    require_admin(staff)
+    row = db.query(StaffAccount).filter(StaffAccount.id == staff_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Staff account not found.")
+    if row.role != "faculty":
+        raise HTTPException(
+            status_code=400, detail="Only faculty accounts can be assigned a module."
+        )
+    row.module = payload.module
+    db.commit()
+    return {"success": True, "id": row.id, "module": row.module}
+
+
+@router.get("/modules")
+def list_modules(staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+    """Distinct module names (staff-assigned ∪ exam-assigned) for admin dropdowns."""
+    require_admin(staff)
+    staff_mods = [
+        r[0] for r in db.query(StaffAccount.module)
+        .filter(StaffAccount.module.isnot(None)).distinct().all() if r[0]
+    ]
+    exam_mods = [
+        r[0] for r in db.query(Exam.module)
+        .filter(Exam.module.isnot(None)).distinct().all() if r[0]
+    ]
+    return {"success": True, "data": sorted(set(staff_mods) | set(exam_mods))}

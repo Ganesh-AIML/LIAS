@@ -34,6 +34,28 @@ def create_session_jwt(student_id: str, exam_id: str, session_id: str, max_age_s
     return jwt.encode(payload, SECRET_SIGNING_KEY, algorithm=ALGORITHM)
 
 
+def create_staff_jwt(staff_id: str) -> str:
+    """Staff (admin/faculty) JWT. Carries ONLY the account id — role and module
+    are re-read from the DB on every request so revocation/module changes apply
+    immediately."""
+    payload = {
+        "sub": staff_id,
+        "exp": int(time.time()) + JWT_EXPIRY_SECONDS,
+    }
+    return jwt.encode(payload, SECRET_SIGNING_KEY, algorithm=ALGORITHM)
+
+
+def decode_staff_jwt(token: str):
+    """Returns the payload dict, or None if the token is invalid/expired/malformed."""
+    try:
+        payload = jwt.decode(token, SECRET_SIGNING_KEY, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if not payload.get("sub"):
+        return None
+    return payload
+
+
 def verify_session_guard(
     credentials: HTTPAuthorizationCredentials = Depends(security_agent),
     db: Session = Depends(get_db),

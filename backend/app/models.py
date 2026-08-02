@@ -34,6 +34,23 @@ class TokenRegistry(Base):
     )
 
 
+class StaffAccount(Base):
+    """Admin/Faculty accounts powering module-based authorization.
+
+    - role='admin'   -> global access to everything.
+    - role='faculty' -> scoped to exactly ONE module (column `module`).
+    - module=NULL on a faculty row means "pending" — no module assigned yet.
+    """
+    __tablename__ = "staff_accounts"
+    id            = Column(String, primary_key=True, index=True)
+    name          = Column(String, nullable=True)
+    email         = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)   # bcrypt rounds=12
+    role          = Column(String, nullable=False)   # 'admin' | 'faculty'
+    module        = Column(String, nullable=True)    # module name string; NULL = pending/unassigned
+    created_at    = Column(Float, default=time.time)
+
+
 class Exam(Base):
     __tablename__ = "exams"
     id                  = Column(String, primary_key=True, index=True)
@@ -48,6 +65,7 @@ class Exam(Base):
     coding_duration_minutes = Column(Integer, default=None)  # None = no section timer
     mcq_duration_minutes    = Column(Integer, default=None)  # None = no section timer
     qna_duration_minutes    = Column(Integer, default=None)  # None = no section timer
+    module              = Column(String, nullable=True)  # module name; NULL = legacy/admin-only
 
     # Relationships - If Exam is deleted, delete all associated content
     questions       = relationship("Question", back_populates="exam", cascade="all, delete-orphan")

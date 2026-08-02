@@ -12,8 +12,8 @@ const invalidateCache = () => {
 };
 
 function adminHeaders() {
-  const token = sessionStorage.getItem('lias_admin_token') || '';
-  return { 'Content-Type': 'application/json', 'X-Admin-Token': token };
+  const token = sessionStorage.getItem('lias_staff_jwt') || '';
+  return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 }
 
 // Throws on HTTP 4xx/5xx — fetch() does not throw on non-2xx by default.

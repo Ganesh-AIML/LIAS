@@ -6,6 +6,7 @@ import {
   ArrowLeft, Clock, Zap, Upload
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
+import { getStaffSession } from '../AuthPage';
 
 // ── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,9 @@ function CredentialModal({ enrollment, examTitle, onClose }) {
 
 export default function StudentDirectory() {
   const [activeTab, setActiveTab] = useState('directory');
+
+  // Faculty (module-scoped) never see admin-only Master Directory mutations.
+  const isAdmin = getStaffSession()?.role === 'admin';
 
   // Master Directory state
   const [masterStudents, setMasterStudents] = useState([]);
@@ -301,7 +305,7 @@ export default function StudentDirectory() {
             {masterStudents.length} students · {masterStudents.filter(s => s.is_active).length} active
           </p>
         </div>
-        {activeTab === 'directory' && (
+        {activeTab === 'directory' && isAdmin && (
           <div className="flex flex-wrap items-center gap-3">
             <input
               ref={fileInputRef}
@@ -363,6 +367,7 @@ export default function StudentDirectory() {
 
           {activeTab === 'directory' && (
             <div className="flex items-center gap-2 w-full sm:w-auto">
+              {isAdmin && (
               <button
                 onClick={() => {
                   if (isBulkMode && selectedIds.length > 0) handleBulkDelete();
@@ -378,6 +383,7 @@ export default function StudentDirectory() {
                 <Trash2 size={14} />
                 {isBulkDeleting ? 'Deleting...' : isBulkMode ? (selectedIds.length > 0 ? `Delete (${selectedIds.length})` : 'Cancel') : 'Bulk Delete'}
               </button>
+              )}
               <div className="relative w-full sm:w-64">
                 <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
                 <input
@@ -405,7 +411,7 @@ export default function StudentDirectory() {
                 <p className="font-bold text-slate-400">
                   {searchQuery ? 'No students match your search.' : 'No students in Master Directory yet.'}
                 </p>
-                {!searchQuery && (
+                {!searchQuery && isAdmin && (
                   <button
                     onClick={() => { setAddForm({ id: '', name: '', password: '' }); setAddError(''); setShowAddModal(true); }}
                     className="mt-4 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold"
@@ -498,7 +504,7 @@ export default function StudentDirectory() {
 
                       {/* Actions */}
                       <td className="px-6 py-4 text-right">
-                        {!isBulkMode && (
+                        {!isBulkMode && isAdmin && (
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             {s.needs_password_reset && (
                               <button
@@ -947,6 +953,7 @@ function TestCredentialsTab({ masterStudents, exams, onRefresh }) {
                   </p>
                   <p className="text-xs text-slate-400 font-bold mb-3">
                     {exam.duration_minutes} min · {fmtDate(exam.starts_at_ms)}
+                    {exam.module && <span className="ml-1.5 text-[10px] font-black uppercase text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-full">{exam.module}</span>}
                   </p>
                   <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
                     <Users size={12} />

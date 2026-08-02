@@ -1,13 +1,11 @@
 """Tests for admin endpoints."""
 
-import os
 import time
 
 
 class TestAdminAuth:
-    def test_verify_with_valid_token(self, client):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
-        response = client.get("/admin/verify", headers={"X-Admin-Token": admin_secret})
+    def test_verify_with_valid_token(self, client, admin_headers):
+        response = client.get("/admin/verify", headers=admin_headers)
         assert response.status_code == 200
         assert response.json()["success"] is True
 
@@ -25,8 +23,7 @@ class TestExamCRUD:
         response = client.post("/admin/exams", json={"title": "Test"})
         assert response.status_code == 403
 
-    def test_create_exam_with_valid_payload(self, client):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
+    def test_create_exam_with_valid_payload(self, client, admin_headers):
         payload = {
             "title": "Integration Test Exam",
             "duration_minutes": 60,
@@ -37,15 +34,14 @@ class TestExamCRUD:
         response = client.post(
             "/admin/exams",
             json=payload,
-            headers={"X-Admin-Token": admin_secret},
+            headers=admin_headers,
         )
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert "exam_id" in data
 
-    def test_create_exam_empty_title_rejected(self, client):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
+    def test_create_exam_empty_title_rejected(self, client, admin_headers):
         response = client.post(
             "/admin/exams",
             json={
@@ -55,35 +51,32 @@ class TestExamCRUD:
                 "start_password": "start123",
                 "status": "upcoming",
             },
-            headers={"X-Admin-Token": admin_secret},
+            headers=admin_headers,
         )
         assert response.status_code == 422
 
 
 class TestStudentValidation:
-    def test_create_master_student_valid(self, client, db):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
+    def test_create_master_student_valid(self, client, db, admin_headers):
         response = client.post(
             "/admin/master-students",
             json={"id": "23-AIML-200", "name": "Valid Student", "password": "pass1234"},
-            headers={"X-Admin-Token": admin_secret},
+            headers=admin_headers,
         )
         assert response.status_code == 200
 
-    def test_create_master_student_short_password_rejected(self, client):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
+    def test_create_master_student_short_password_rejected(self, client, admin_headers):
         response = client.post(
             "/admin/master-students",
             json={"id": "23-AIML-201", "name": "Bad", "password": "ab"},
-            headers={"X-Admin-Token": admin_secret},
+            headers=admin_headers,
         )
         assert response.status_code == 422
 
-    def test_create_master_student_xss_id_rejected(self, client):
-        admin_secret = os.getenv("ADMIN_SECRET", "test_admin_secret")
+    def test_create_master_student_xss_id_rejected(self, client, admin_headers):
         response = client.post(
             "/admin/master-students",
             json={"id": "<script>alert(1)</script>", "name": "XSS", "password": "pass1234"},
-            headers={"X-Admin-Token": admin_secret},
+            headers=admin_headers,
         )
         assert response.status_code == 422

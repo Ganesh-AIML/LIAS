@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models import Exam, ExamSession, Question, CodingProblem, SubjectiveQuestion
 from app.limiter import limiter
 
-from app.routes.admin import verify_admin, dedupe_sessions_per_student
+from app.routes.admin import verify_admin, dedupe_sessions_per_student, require_exam_scope
 
 router = APIRouter()
 logger = logging.getLogger("scope")
@@ -49,12 +49,14 @@ class ReviewStatusPayload(BaseModel):
 @router.get("/exams/{exam_id}/evaluate")
 def list_evaluate_students(
     exam_id: str,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
@@ -123,7 +125,7 @@ def list_evaluate_students(
 def get_evaluation_detail(
     exam_id: str,
     session_id: str,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     session = (
@@ -137,6 +139,8 @@ def get_evaluation_detail(
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
@@ -244,7 +248,7 @@ def save_evaluation(
     exam_id: str,
     session_id: str,
     payload: SaveEvaluationPayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     session = (
@@ -254,6 +258,12 @@ def save_evaluation(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
@@ -321,7 +331,7 @@ def clear_evaluation(
     request: Request,
     exam_id: str,
     session_id: str,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     session = (
@@ -331,6 +341,12 @@ def clear_evaluation(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
@@ -356,7 +372,7 @@ def set_review_status(
     exam_id: str,
     session_id: str,
     payload: ReviewStatusPayload,
-    _: bool = Depends(verify_admin),
+    staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
     session = (
@@ -366,6 +382,12 @@ def set_review_status(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
+
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found.")
+
+    require_exam_scope(staff, exam)
 
     valid_statuses = {None, "pending", "reviewed", "flagged"}
     if payload.status not in valid_statuses:
