@@ -219,6 +219,37 @@ def _run_additive_migrations():
             db.rollback()
             logger.warning("coding_problems.marks migration skipped: %s", e)
 
+        # ── FACULTY-OWNED EVALUATIONS (additive; per-faculty manual grading) ──
+        # One row per (session, faculty). Mutable; uniqueness prevents duplicate
+        # saves. Legacy ownerless marks stay on exam_sessions (untouched).
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS faculty_evaluations (
+                    id VARCHAR PRIMARY KEY,
+                    session_id VARCHAR NOT NULL REFERENCES exam_sessions(id) ON DELETE CASCADE,
+                    faculty_id VARCHAR NOT NULL REFERENCES staff_accounts(id) ON DELETE SET NULL,
+                    coding_marks TEXT,
+                    subjective_marks TEXT,
+                    total_score FLOAT,
+                    review_status VARCHAR,
+                    created_at FLOAT,
+                    evaluated_at FLOAT
+                );
+            """))
+            db.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_faculty_eval_session_faculty "
+                "ON faculty_evaluations(session_id, faculty_id);"
+            ))
+            db.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_faculty_evaluations_faculty_id "
+                "ON faculty_evaluations(faculty_id);"
+            ))
+            db.commit()
+            logger.info("✅ faculty_evaluations table ready.")
+        except Exception as e:
+            db.rollback()
+            logger.warning("faculty_evaluations migration skipped: %s", e)
+
         # ── EXAMS MODULE COLUMN (additive; module-based authorization) ──
         # Existing exams get module=NULL -> visible to admins only until an
         # admin assigns the exam to a module.

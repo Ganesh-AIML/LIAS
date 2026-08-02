@@ -10,6 +10,14 @@ from app.models import Exam, ExamSession, Question, CodingProblem, SubjectiveQue
 from app.limiter import limiter
 
 from app.routes.admin import verify_admin, dedupe_sessions_per_student, require_exam_scope
+from app.evaluation_ctx import (
+    get_or_create_faculty_eval,
+    get_faculty_eval,
+    resolve_context,
+    evaluation_material,
+    ensure_faculty_writer,
+    parse_json,
+)
 
 router = APIRouter()
 logger = logging.getLogger("scope")
@@ -49,14 +57,22 @@ class ReviewStatusPayload(BaseModel):
 @router.get("/exams/{exam_id}/evaluate")
 def list_evaluate_students(
     exam_id: str,
+    faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
+    """List students for manual evaluation under ONE evaluation context.
+
+    - faculty: always their OWN evaluation (faculty_id param is ignored/coerced).
+    - admin:   the selected faculty (query param) or the server-computed
+               default; legacy marks only when nothing faculty-owned exists.
+    """
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+    ctx = resolve_context(staff, exam, db, faculty_id)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
@@ -71,29 +87,16 @@ def list_evaluate_students(
 
     result = []
     for s in sessions:
-        # compute MCQ score deterministically
         mcq_score = s.mcq_score
         if mcq_score is None:
             mcq_score = _compute_mcq_score(s, q_map)
 
-        coding_eval = {}
-        if s.coding_evaluation:
-            try:
-                coding_eval = json.loads(s.coding_evaluation)
-            except Exception:
-                pass
+        material = evaluation_material(s, ctx, db)
+        cod_sum = sum(material["coding_marks"].values())
+        subj_sum = sum(material["subjective_marks"].values())
 
-        subj_eval = {}
-        if s.subjective_evaluation:
-            try:
-                subj_eval = json.loads(s.subjective_evaluation)
-            except Exception:
-                pass
-
-        total = s.total_score
+        total = material["total_score"]
         if total is None:
-            cod_sum = sum(coding_eval.values()) if coding_eval else 0
-            subj_sum = sum(subj_eval.values()) if subj_eval else 0
             total = (mcq_score or 0) + cod_sum + subj_sum
 
         dept = "General"
@@ -109,11 +112,11 @@ def list_evaluate_students(
             "submitted_at": s.created_at,
             "submission_status": s.is_submitted,
             "mcq_score": mcq_score or 0,
-            "current_coding_marks": coding_eval,
-            "current_subjective_marks": subj_eval,
+            "current_coding_marks": material["coding_marks"],
+            "current_subjective_marks": material["subjective_marks"],
             "total_score": total,
-            "review_status": s.review_status,
-            "evaluated_at": s.evaluated_at,
+            "review_status": material["review_status"],
+            "evaluated_at": material["evaluated_at"],
         })
 
     return {"success": True, "data": result}
@@ -125,6 +128,7 @@ def list_evaluate_students(
 def get_evaluation_detail(
     exam_id: str,
     session_id: str,
+    faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
@@ -141,6 +145,7 @@ def get_evaluation_detail(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+    ctx = resolve_context(staff, exam, db, faculty_id)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
@@ -207,19 +212,12 @@ def get_evaluation_detail(
             "student_answer": subj_payload.get(sq.id, ""),
         })
 
-    # Current evaluation
-    coding_eval = {}
-    if session.coding_evaluation:
-        try:
-            coding_eval = json.loads(session.coding_evaluation)
-        except Exception:
-            pass
-    subj_eval = {}
-    if session.subjective_evaluation:
-        try:
-            subj_eval = json.loads(session.subjective_evaluation)
-        except Exception:
-            pass
+    material = evaluation_material(session, ctx, db)
+    total = material["total_score"]
+    if total is None:
+        cod_sum = sum(material["coding_marks"].values())
+        subj_sum = sum(material["subjective_marks"].values())
+        total = mcq_score + cod_sum + subj_sum
 
     return {
         "success": True,
@@ -230,16 +228,16 @@ def get_evaluation_detail(
             "mcq_details": mcq_details,
             "coding_details": coding_details,
             "subjective_details": subjective_details,
-            "current_coding_marks": coding_eval,
-            "current_subjective_marks": subj_eval,
-            "total_score": session.total_score,
-            "review_status": session.review_status,
-            "evaluated_at": session.evaluated_at,
+            "current_coding_marks": material["coding_marks"],
+            "current_subjective_marks": material["subjective_marks"],
+            "total_score": total,
+            "review_status": material["review_status"],
+            "evaluated_at": material["evaluated_at"],
         },
     }
 
 
-# ── 3. SAVE EVALUATION MARKS ────────────────────────────────────────────────
+# ── 3. SAVE EVALUATION MARKS (faculty-owned) ────────────────────────────────
 
 @router.post("/exams/{exam_id}/evaluate/{session_id}")
 @limiter.limit("30/minute")
@@ -264,48 +262,39 @@ def save_evaluation(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+    ensure_faculty_writer(staff)  # admin: strictly read-only (403)
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
 
-    # Compute MCQ score deterministically
+    # MCQ stays SYSTEM-GENERATED and shared; persisted for cheap reads.
     mcq_score = _compute_mcq_score(session, q_map)
     session.mcq_score = mcq_score
 
-    # Merge coding marks (preserve existing marks for unchanged problems)
-    existing_coding = {}
-    if session.coding_evaluation:
-        try:
-            existing_coding = json.loads(session.coding_evaluation)
-        except Exception:
-            pass
+    faculty_id = staff["id"]
+    faculty_eval = get_or_create_faculty_eval(db, session.id, faculty_id)
+
+    # Merge coding marks — onto this faculty's OWN record only.
+    existing_coding = parse_json(faculty_eval.coding_marks)
     if payload.coding_marks:
         existing_coding.update(payload.coding_marks)
-    session.coding_evaluation = json.dumps(existing_coding) if existing_coding else None
+    faculty_eval.coding_marks = json.dumps(existing_coding) if existing_coding else None
 
-    # Merge subjective marks
-    existing_subj = {}
-    if session.subjective_evaluation:
-        try:
-            existing_subj = json.loads(session.subjective_evaluation)
-        except Exception:
-            pass
+    existing_subj = parse_json(faculty_eval.subjective_marks)
     if payload.subjective_marks:
         existing_subj.update(payload.subjective_marks)
-    session.subjective_evaluation = json.dumps(existing_subj) if existing_subj else None
+    faculty_eval.subjective_marks = json.dumps(existing_subj) if existing_subj else None
 
-    # Compute total score
     cod_sum = sum(existing_coding.values()) if existing_coding else 0
     subj_sum = sum(existing_subj.values()) if existing_subj else 0
-    session.total_score = mcq_score + cod_sum + subj_sum
+    faculty_eval.total_score = mcq_score + cod_sum + subj_sum
 
-    # Set review status if provided
     if payload.review_status is not None:
         valid_statuses = {None, "pending", "reviewed", "flagged"}
         if payload.review_status in valid_statuses:
-            session.review_status = payload.review_status
+            faculty_eval.review_status = payload.review_status
 
-    session.evaluated_at = time.time()
+    faculty_eval.evaluated_at = time.time()
     db.commit()
 
     return {
@@ -316,14 +305,14 @@ def save_evaluation(
             "mcq_score": mcq_score,
             "coding_marks": existing_coding,
             "subjective_marks": existing_subj,
-            "total_score": session.total_score,
-            "review_status": session.review_status,
-            "evaluated_at": session.evaluated_at,
+            "total_score": faculty_eval.total_score,
+            "review_status": faculty_eval.review_status,
+            "evaluated_at": faculty_eval.evaluated_at,
         },
     }
 
 
-# ── 4. CLEAR EVALUATION MARKS ───────────────────────────────────────────────
+# ── 4. CLEAR EVALUATION MARKS (faculty-owned) ───────────────────────────────
 
 @router.post("/exams/{exam_id}/evaluate/{session_id}/clear")
 @limiter.limit("30/minute")
@@ -347,23 +336,29 @@ def clear_evaluation(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+    ensure_faculty_writer(staff)
+
+    faculty_id = staff["id"]
+    faculty_eval = get_faculty_eval(db, session.id, faculty_id)
+    if not faculty_eval:
+        raise HTTPException(
+            status_code=404,
+            detail="No evaluation found for this faculty.",
+        )
 
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
     q_map = {q.id: q for q in questions}
     mcq_score = _compute_mcq_score(session, q_map)
-
     session.mcq_score = mcq_score
-    session.coding_evaluation = None
-    session.subjective_evaluation = None
-    session.total_score = mcq_score
-    session.review_status = None
-    session.evaluated_at = None
+
+    # Removing this faculty's record only — other faculty's marks are untouched.
+    db.delete(faculty_eval)
     db.commit()
 
     return {"success": True, "message": "Evaluation marks cleared."}
 
 
-# ── 5. SET REVIEW STATUS ────────────────────────────────────────────────────
+# ── 5. SET REVIEW STATUS (faculty-owned) ────────────────────────────────────
 
 @router.post("/exams/{exam_id}/evaluate/{session_id}/review")
 @limiter.limit("30/minute")
@@ -388,18 +383,20 @@ def set_review_status(
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+    ensure_faculty_writer(staff)
 
     valid_statuses = {None, "pending", "reviewed", "flagged"}
     if payload.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid review status. Must be one of: {valid_statuses}")
 
-    session.review_status = payload.status
+    faculty_eval = get_or_create_faculty_eval(db, session.id, staff["id"])
+    faculty_eval.review_status = payload.status
     db.commit()
 
     return {
         "success": True,
         "data": {
             "session_id": session.id,
-            "review_status": session.review_status,
+            "review_status": faculty_eval.review_status,
         },
     }

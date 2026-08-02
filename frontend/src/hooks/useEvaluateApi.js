@@ -1,11 +1,14 @@
 import { adminApi } from './useAdminApi';
 
-export const evaluateApi = {
-  listStudents: (examId) =>
-    adminApi.get(`/admin/exams/${examId}/evaluate`),
+const withFaculty = (facultyId) =>
+  facultyId ? `?faculty_id=${encodeURIComponent(facultyId)}` : '';
 
-  getDetail: (examId, sessionId) =>
-    adminApi.get(`/admin/exams/${examId}/evaluate/${sessionId}`),
+export const evaluateApi = {
+  listStudents: (examId, facultyId) =>
+    adminApi.get(`/admin/exams/${examId}/evaluate${withFaculty(facultyId)}`),
+
+  getDetail: (examId, sessionId, facultyId) =>
+    adminApi.get(`/admin/exams/${examId}/evaluate/${sessionId}${withFaculty(facultyId)}`),
 
   saveMarks: (examId, sessionId, body) =>
     adminApi.post(`/admin/exams/${examId}/evaluate/${sessionId}`, body),

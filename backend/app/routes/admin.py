@@ -13,11 +13,17 @@ from sqlalchemy import func
 from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
 from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student, StaffAccount
+from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student, StaffAccount, FacultyEvaluation
 from app.auth import decode_staff_jwt
 from app.module_codes import MODULE_CODES, MODULES
 from app.limiter import limiter
 from app.routes.staff_auth import ModuleAssignPayload
+from app.evaluation_ctx import (
+    resolve_context,
+    evaluation_material,
+    default_faculty_id,
+    legacy_available,
+)
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
 if not ENCRYPTION_KEY:
@@ -519,11 +525,63 @@ def update_exam(
 
 
 
+# ── FACULTY-OWNED EVALUATION CONTEXT ──────────────────────────────────────────
+
+def _build_faculty_context(staff: dict, exam, db: Session) -> dict:
+    """Faculty roster for the exam's module with per-faculty evaluation state.
+
+    - faculty role -> only their own identity, no roster leak.
+    - admin       -> every faculty assigned to exam.module, with
+                     has_evaluated / first_evaluated_at for selector UI.
+    """
+    entries = []
+    sedge = (
+        db.query(FacultyEvaluation)
+        .join(ExamSession, ExamSession.id == FacultyEvaluation.session_id)
+        .filter(
+            ExamSession.exam_id == exam.id,
+            (FacultyEvaluation.coding_marks.isnot(None))
+            | (FacultyEvaluation.subjective_marks.isnot(None)),
+        )
+    )
+    if staff.get("role") == "faculty":
+        first = sedge.filter(FacultyEvaluation.faculty_id == staff.get("id")).order_by(FacultyEvaluation.created_at.asc()).first()
+        entries.append({
+            "id": staff.get("id"),
+            "name": staff.get("name"),
+            "email": staff.get("email"),
+            "has_evaluated": first is not None,
+            "first_evaluated_at": first.created_at if first else None,
+        })
+    else:
+        frows = (
+            db.query(StaffAccount)
+            .filter(StaffAccount.role == "faculty", StaffAccount.module == exam.module)
+            .order_by(StaffAccount.created_at.asc())
+            .all()
+        ) if exam.module else []
+        for r in frows:
+            first = sedge.filter(FacultyEvaluation.faculty_id == r.id).order_by(FacultyEvaluation.created_at.asc()).first()
+            entries.append({
+                "id": r.id,
+                "name": r.name or r.email,
+                "email": r.email,
+                "has_evaluated": first is not None,
+                "first_evaluated_at": first.created_at if first else None,
+            })
+    return {
+        "available_faculty": entries,
+        "default_faculty_id": default_faculty_id(db, exam.id),
+        "legacy_available": legacy_available(db, exam.id),
+    }
+
+
 @router.get("/exams/{exam_id}/analytics")
 def get_exam_analytics(
     exam_id: str,
     limit: Optional[int] = None,
     offset: int = 0,
+    faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
     db: Session = Depends(get_db),
 ):
@@ -535,12 +593,22 @@ def get_exam_analytics(
     behaviour (return all students) so existing callers are unaffected; callers
     that need to avoid loading all sessions for large exams can now page through
     results.
+
+    Faculty ownership (optional `faculty_id` query): for faculty it is always
+    coerced to their own evaluation. For admin it selects the evaluation
+    context shown/exported; omitted -> server-computed default (earliest
+    faculty), or legacy ownerless marks when none exist.
     """
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+
+    ctx = resolve_context(staff, exam, db, faculty_id)
+    faculty_context = _build_faculty_context(staff, exam, db)
+    faculty_context["selected_faculty_id"] = ctx["selected"]
+    faculty_context["is_legacy"] = ctx["legacy"]
 
     # 1. Fetch Master Data
     questions = db.query(Question).filter(Question.exam_id == exam_id).all()
@@ -595,25 +663,13 @@ def get_exam_analytics(
                 if q and q.ans == ans:
                     mcq_score += q.marks or 1
 
-        # ── READ PERSISTED EVALUATION SCORES ──
-        coding_eval = {}
-        if s.coding_evaluation:
-            try:
-                coding_eval = json.loads(s.coding_evaluation)
-            except Exception:
-                pass
-        cod_score = sum(coding_eval.values()) if coding_eval else 0
-
-        subj_eval = {}
-        if s.subjective_evaluation:
-            try:
-                subj_eval = json.loads(s.subjective_evaluation)
-            except Exception:
-                pass
-        subjective_score = sum(subj_eval.values()) if subj_eval else 0
+        # ── READ PERSISTED EVALUATION SCORES (selected faculty context) ──
+        material = evaluation_material(s, ctx, db)
+        cod_score = sum(material["coding_marks"].values())
+        subjective_score = sum(material["subjective_marks"].values())
 
         # ── TOTAL SCORE ──
-        total = s.total_score
+        total = material["total_score"]
         if total is None:
             total = mcq_score + cod_score + subjective_score
 
@@ -653,8 +709,8 @@ def get_exam_analytics(
             "total_score": total,
             "coding_submissions": coding_submissions,
             "subjective_answers": subj_payload,
-            "review_status": s.review_status,
-            "evaluated_at": s.evaluated_at,
+            "review_status": material["review_status"],
+            "evaluated_at": material["evaluated_at"],
         })
     # 3. Return Payload matching AnalyticsView.jsx expectations
     return {
@@ -666,6 +722,7 @@ def get_exam_analytics(
             "coding_problems": [{"id": cp.id, "title": cp.title} for cp in coding_probs],
             "subjective_questions": [{"id": sq.id, "section": sq.section, "text": sq.text} for sq in subjective_questions],
             "students": student_results,
+            "faculty_context": faculty_context,
             "total_students": total_students,  # AUD-014: lets callers page through large exams
             "limit": limit,
             "offset": offset,

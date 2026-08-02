@@ -4,7 +4,7 @@ import QuestionRenderer from '../exam/QuestionRenderer';
 import AnswerRenderer from '../exam/AnswerRenderer';
 import { Search, ChevronRight, Save, RotateCcw, Flag, Loader, AlertCircle } from 'lucide-react';
 
-export default function SubjectiveEvaluator({ examId, onSave }) {
+export default function SubjectiveEvaluator({ examId, onSave, facultyId, readOnly, contextLabel = null }) {
   const [students, setStudents] = useState([]);
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -18,14 +18,14 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
   const fetchStudents = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await evaluateApi.listStudents(examId);
+      const res = await evaluateApi.listStudents(examId, facultyId);
       if (res.success) setStudents(res.data || []);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [examId]);
+  }, [examId, facultyId]);
 
   useEffect(() => { fetchStudents(); }, [fetchStudents]);
 
@@ -34,7 +34,7 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
     try {
       setLoading(true);
       setSelected(sessionId);
-      const res = await evaluateApi.getDetail(examId, sessionId);
+      const res = await evaluateApi.getDetail(examId, sessionId, facultyId);
       if (selectedRef.current !== sessionId) return;
       if (res.success) {
         setDetail(res.data);
@@ -170,7 +170,9 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-black text-slate-900">{detail.student_id}</h3>
-                <p className="text-xs text-slate-400">Subjective Answers</p>
+                <p className="text-xs text-slate-400">
+                  Subjective Answers{contextLabel ? ` · ${contextLabel}` : ''}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-500">MCQ: {detail.mcq_score}</span>
@@ -216,7 +218,10 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
                     step="0.5"
                     value={marks[sq.question_id] ?? ''}
                     onChange={e => handleMarksChange(sq.question_id, e.target.value)}
-                    className="w-24 px-3 py-1.5 border border-slate-300 rounded-lg text-sm font-bold text-center focus:outline-none focus:border-blue-500"
+                    disabled={readOnly}
+                    className={`w-24 px-3 py-1.5 border rounded-lg text-sm font-bold text-center focus:outline-none focus:border-blue-500 ${
+                      readOnly ? 'bg-slate-100 text-slate-600 cursor-not-allowed' : 'border-slate-300'
+                    }`}
                     placeholder="0"
                   />
                   <span className="text-xs text-slate-400">/ {sq.max_marks || 10}</span>
@@ -224,7 +229,8 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
               </div>
             ))}
 
-            {/* Action buttons */}
+            {/* Action buttons (hidden for read-only admin review) */}
+            {!readOnly && (
             <div className="flex items-center gap-3 pt-4 border-t border-slate-200">
               <button
                 onClick={handleSave}
@@ -254,6 +260,7 @@ export default function SubjectiveEvaluator({ examId, onSave }) {
                 Mark Reviewed
               </button>
             </div>
+            )}
           </div>
         )}
       </div>

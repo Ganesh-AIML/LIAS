@@ -101,6 +101,30 @@ class ExamSession(Base):
     )
 
 
+class FacultyEvaluation(Base):
+    """Faculty-owned manual evaluation for one (faculty, student-session).
+
+    Coding and Subjective marks live together in a single OWNED evaluation
+    context. One row per (session_id, faculty_id); repeated saves update the
+    same row (mutable / re-revisable), never a duplicate. MCQ scoring stays on
+    ExamSession (system-generated, shared) and is intentionally NOT owned here.
+    """
+    __tablename__ = "faculty_evaluations"
+    id               = Column(String, primary_key=True, index=True)
+    session_id       = Column(String, ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    faculty_id       = Column(String, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=False, index=True)
+    coding_marks     = Column(Text, nullable=True)   # JSON: {cp_id: marks}
+    subjective_marks = Column(Text, nullable=True)   # JSON: {sq_id: marks}
+    total_score      = Column(Float, nullable=True)  # mcq + sum(coding) + sum(subjective)
+    review_status    = Column(String, nullable=True) # null | "pending" | "reviewed" | "flagged"
+    created_at       = Column(Float, default=time.time)  # first save (drives the admin default selection)
+    evaluated_at     = Column(Float, nullable=True)      # last save
+
+    __table_args__ = (
+        UniqueConstraint('session_id', 'faculty_id', name='uq_faculty_eval_session_faculty'),
+    )
+
+
 class ViolationLog(Base):
     __tablename__ = "violation_logs"
     id          = Column(Integer, primary_key=True, autoincrement=True)

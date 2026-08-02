@@ -5,6 +5,7 @@ import {
   TrendingUp, Award, Search, X
 } from 'lucide-react';
 import { adminApi } from '../../../hooks/useAdminApi';
+import { getStaffSession } from '../AuthPage';
 import CodingEvaluator from '../../../components/admin/CodingEvaluator';
 import SubjectiveEvaluator from '../../../components/admin/SubjectiveEvaluator';
 
@@ -150,14 +151,38 @@ export default function AnalyticsView({ test, onBack }) {
   const [selectedStudentDetail, setSelectedStudentDetail] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+// Faculty-ownership context. Admin gets a faculty selector; faculty users
+  // are scoped to their OWN evaluation server-side (never a selector here).
+  const staff = getStaffSession() || {};
+  const isAdmin = staff.role === 'admin';
+  const [selectedFacultyId, setSelectedFacultyId] = useState(null); // null = default/auto
+  const [facultyContext, setFacultyContext] = useState(null);
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await adminApi.get(`/admin/exams/${test.id}/analytics`);
-      if (res.success) setAnalyticsData(res.data);
+      const query = isAdmin && selectedFacultyId
+        ? `?faculty_id=${encodeURIComponent(selectedFacultyId)}`
+        : '';
+      const res = await adminApi.get(`/admin/exams/${test.id}/analytics${query}`);
+      if (res.success) {
+        setAnalyticsData(res.data);
+        const ctx = res.data.faculty_context;
+        if (ctx) {
+          setFacultyContext(ctx);
+          // First load (no explicit selection yet) -> adopt the server default
+          // (earliest-evaluating faculty, or legacy when none faculty-owned).
+          if (isAdmin && selectedFacultyId == null) {
+            const defaultId =
+              ctx.default_faculty_id ||
+              (ctx.is_legacy && ctx.legacy_available ? '__legacy__' : null);
+            if (defaultId) setSelectedFacultyId(defaultId);
+          }
+        }
+      }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
-  }, [test.id]);
+  }, [test.id, isAdmin, selectedFacultyId]);
 
   useEffect(() => { if (test?.id) fetchData(); }, [test.id, fetchData, refreshKey]);
 
@@ -213,6 +238,12 @@ export default function AnalyticsView({ test, onBack }) {
   const passCount = allStudents.filter(s => s.total >= passThreshold).length;
   const failCount = allStudents.length - passCount;
 
+  const selectedFacultyEntry = (facultyContext?.available_faculty || []).find(f => f.id === selectedFacultyId);
+  const selectedFacultyLabel =
+    selectedFacultyEntry?.name ||
+    (facultyContext?.is_legacy ? 'Legacy (previous)' : null) ||
+    'Default';
+
   const SECTIONS = [
     { id: 'overview',   label: 'Overview',    icon: BarChart2, color: 'bg-blue-50 text-blue-800 border-blue-200' },
     { id: 'mcqs',       label: 'MCQs',         icon: CheckCircle, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
@@ -260,10 +291,32 @@ export default function AnalyticsView({ test, onBack }) {
             <p className="text-xs text-slate-400 mt-1">{allStudents.length} students appeared</p>
           </div>
         </div>
-        <button onClick={() => exportToCsv(allStudents, test?.title || "Analytics")}
-          className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl transition-all text-sm shadow-sm">
-          <Download size={16} /> Export CSV
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          {isAdmin && facultyContext && (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Faculty</span>
+              <select
+                value={selectedFacultyId ?? ''}
+                onChange={e => setSelectedFacultyId(e.target.value || null)}
+                className="bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 px-2 py-1.5 focus:outline-none focus:border-blue-500"
+              >
+                <option value="">Auto (default)</option>
+                {(facultyContext.available_faculty || []).map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}{f.has_evaluated ? '' : ' (Pending)'}
+                  </option>
+                ))}
+                {facultyContext.legacy_available && (
+                  <option value="__legacy__">Legacy (previous)</option>
+                )}
+              </select>
+            </div>
+          )}
+          <button onClick={() => exportToCsv(allStudents, test?.title || "Analytics")}
+            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl transition-all text-sm shadow-sm">
+            <Download size={16} /> Export CSV
+          </button>
+        </div>
       </div>
 
       {/* Overview stat cards */}
@@ -345,12 +398,24 @@ export default function AnalyticsView({ test, onBack }) {
 
       {/* Coding tab */}
       {activeSection === 'coding' && (
-        <CodingEvaluator examId={test.id} onSave={handleSave} />
+        <CodingEvaluator
+          examId={test.id}
+          onSave={handleSave}
+          facultyId={isAdmin ? (selectedFacultyId || '__legacy__') : undefined}
+          readOnly={isAdmin}
+          contextLabel={selectedFacultyLabel}
+        />
       )}
 
       {/* Subjective tab */}
       {activeSection === 'subjective' && (
-        <SubjectiveEvaluator examId={test.id} onSave={handleSave} />
+        <SubjectiveEvaluator
+          examId={test.id}
+          onSave={handleSave}
+          facultyId={isAdmin ? (selectedFacultyId || '__legacy__') : undefined}
+          readOnly={isAdmin}
+          contextLabel={selectedFacultyLabel}
+        />
       )}
 
       {/* Leaderboard tab */}
