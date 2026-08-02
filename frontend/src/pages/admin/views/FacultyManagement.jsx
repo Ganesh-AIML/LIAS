@@ -95,16 +95,16 @@ export default function FacultyManagement() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <input
-                        list="module-options"
+                      <select
                         value={drafts[s.id] !== undefined ? drafts[s.id] : (s.module || '')}
                         onChange={e => setDrafts(d => ({ ...d, [s.id]: e.target.value }))}
-                        placeholder="Type or pick a module"
                         className="w-48 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus:border-blue-600"
-                      />
-                      <datalist id="module-options">
-                        {modules.map(m => <option key={m} value={m} />)}
-                      </datalist>
+                      >
+                        <option value="">No module (pending)</option>
+                        {modules.map(m => (
+                          <option key={m.code} value={m.code}>{m.code} · {m.title}</option>
+                        ))}
+                      </select>
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right whitespace-nowrap">

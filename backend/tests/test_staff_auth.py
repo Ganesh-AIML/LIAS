@@ -74,7 +74,7 @@ class TestFacultyLogin:
         assert data["success"] is True
         assert data["token"]
         assert data["staff"]["role"] == "faculty"
-        assert data["staff"]["module"] == "AIML"
+        assert data["staff"]["module"] == "MAS701"
 
     def test_faculty_login_rejects_admin(self, client, admin_staff):
         response = client.post(
@@ -171,7 +171,7 @@ class TestTokenBehaviour:
         assert response.status_code == 200
         data = response.json()
         assert data["role"] == "faculty"
-        assert data["module"] == "AIML"
+        assert data["module"] == "MAS701"
 
     def test_garbage_bearer_token_rejected(self, client):
         response = client.get(

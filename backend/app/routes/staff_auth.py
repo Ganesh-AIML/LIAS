@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models import StaffAccount
 from app.auth import create_staff_jwt
 from app.limiter import limiter
+from app.module_codes import MODULE_CODES
 
 router = APIRouter()
 logger = logging.getLogger("scope")
@@ -68,13 +69,13 @@ class ModuleAssignPayload(BaseModel):
 
     @field_validator("module")
     @classmethod
-    def module_valid(cls, v):
+    def module_must_be_canonical(cls, v):
         if v is None:
-            return v
-        v = v.strip()
-        if len(v) > 100:
-            raise ValueError("Module name too long (max 100 characters).")
-        return v or None
+            return None
+        v = v.strip().upper()
+        if v not in MODULE_CODES:
+            raise ValueError(f"Unknown module code '{v}'. Must be one of: {', '.join(sorted(MODULE_CODES))}.")
+        return v
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────

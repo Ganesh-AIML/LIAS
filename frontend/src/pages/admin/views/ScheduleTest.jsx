@@ -81,7 +81,7 @@ export default function ScheduleTest({ initialData, onBack }) {
   const isFaculty = staff?.role === 'faculty';
   const [moduleOptions, setModuleOptions] = useState([]);
 
-  // Admins can pick from existing modules (free-text allowed via datalist).
+  // Admins pick from the canonical module codes (static list, never typed).
   useEffect(() => {
     if (isFaculty) return;
     adminApi.get('/admin/modules')
@@ -273,17 +273,16 @@ export default function ScheduleTest({ initialData, onBack }) {
             ) : (
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Module <span className="text-slate-300 normal-case font-medium">optional</span></label>
-                <input
-                  type="text"
-                  list="schedule-module-options"
+                <select
                   value={testMeta.module}
                   onChange={(e) => setTestMeta({ ...testMeta, module: e.target.value })}
                   className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 outline-none bg-slate-50 font-semibold text-slate-900"
-                  placeholder="e.g. AIML — exams without a module are admin-only"
-                />
-                <datalist id="schedule-module-options">
-                  {moduleOptions.map(m => <option key={m} value={m} />)}
-                </datalist>
+                >
+                  <option value="">No module (admin-only)</option>
+                  {moduleOptions.map(m => (
+                    <option key={m.code} value={m.code}>{m.code} · {m.title}</option>
+                  ))}
+                </select>
               </div>
             )}
             <div className="grid grid-cols-2 gap-4">

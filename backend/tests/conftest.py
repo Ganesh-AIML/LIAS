@@ -18,6 +18,10 @@ os.environ["ADMIN_SECRET"] = "test_admin_secret_123"
 os.environ["JWT_SECRET_KEY"] = "test_jwt_secret_key_for_testing_purposes_only"
 os.environ["DB_ENCRYPTION_KEY"] = "wIAgy-gUwS1wSaQAKOeC4RcmO4zsJuPx780uRyWxMeU="
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
+# Disable the admin seed in tests — the bootstrap window (X-Admin-Token) and
+# staff fixtures must control exactly which admin accounts exist.
+os.environ["ADMIN_EMAIL"] = ""
+os.environ["ADMIN_PASSWORD"] = ""
 
 import pytest
 import bcrypt
@@ -164,7 +168,7 @@ def faculty_staff(db):
         email="faculty@test.local",
         password_hash=_staff_hash(),
         role="faculty",
-        module="AIML",
+        module="MAS701",
     )
     db.add(staff)
     db.commit()
@@ -184,7 +188,7 @@ def other_faculty_staff(db):
         email="other@test.local",
         password_hash=_staff_hash(),
         role="faculty",
-        module="CS",
+        module="MAS702",
     )
     db.add(staff)
     db.commit()

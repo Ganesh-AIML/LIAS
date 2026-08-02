@@ -15,6 +15,7 @@ from cryptography.fernet import Fernet
 from app.database import get_db
 from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student, StaffAccount
 from app.auth import decode_staff_jwt
+from app.module_codes import MODULE_CODES, MODULES
 from app.limiter import limiter
 from app.routes.staff_auth import ModuleAssignPayload
 
@@ -237,13 +238,13 @@ class ExamCreatePayload(BaseModel):
 
     @field_validator("module")
     @classmethod
-    def module_not_too_long(cls, v):
+    def module_must_be_canonical(cls, v):
         if v is None:
-            return v
-        v = v.strip()
-        if len(v) > 100:
-            raise ValueError("Module name too long (max 100 characters).")
-        return v or None
+            return None
+        v = v.strip().upper()
+        if v not in MODULE_CODES:
+            raise ValueError(f"Unknown module code '{v}'. Must be one of: {', '.join(sorted(MODULE_CODES))}.")
+        return v
 
     @field_validator("duration_minutes")
     @classmethod
@@ -1561,14 +1562,6 @@ def assign_staff_module(
 
 @router.get("/modules")
 def list_modules(staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    """Distinct module names (staff-assigned ∪ exam-assigned) for admin dropdowns."""
+    """Canonical module registry (fixed list of codes, never user-typed)."""
     require_admin(staff)
-    staff_mods = [
-        r[0] for r in db.query(StaffAccount.module)
-        .filter(StaffAccount.module.isnot(None)).distinct().all() if r[0]
-    ]
-    exam_mods = [
-        r[0] for r in db.query(Exam.module)
-        .filter(Exam.module.isnot(None)).distinct().all() if r[0]
-    ]
-    return {"success": True, "data": sorted(set(staff_mods) | set(exam_mods))}
+    return {"success": True, "data": list(MODULES)}
