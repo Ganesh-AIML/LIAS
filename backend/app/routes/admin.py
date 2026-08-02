@@ -24,6 +24,7 @@ from app.evaluation_ctx import (
     default_faculty_id,
     legacy_available,
 )
+from app.routes.exam import finalize_expired_sessions
 
 ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
 if not ENCRYPTION_KEY:
@@ -605,6 +606,11 @@ def get_exam_analytics(
 
     require_exam_scope(staff, exam)
 
+    # Server-side fallback for the client-only auto-submit: finalize any session
+    # whose exam window (end + grace) has fully passed so it reports as
+    # Submitted/"Finished" instead of lingering "In Progress".
+    finalize_expired_sessions(db, exam_id=exam_id)
+
     ctx = resolve_context(staff, exam, db, faculty_id)
     faculty_context = _build_faculty_context(staff, exam, db)
     faculty_context["selected_faculty_id"] = ctx["selected"]
@@ -803,6 +809,11 @@ def get_live_monitor(exam_id: str, staff: dict = Depends(verify_admin), db: Sess
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
+
+    # Server-side fallback for the client-only auto-submit: finalize expired
+    # (end + grace elapsed) sessions so the monitor reflects them as Completed
+    # instead of lingering in the active "In Exam" bucket.
+    finalize_expired_sessions(db, exam_id=exam_id)
 
     enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
     all_sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id).all()

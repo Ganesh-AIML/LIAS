@@ -35,6 +35,54 @@ ALLOWED_EVENTS = {
 # Grace period (seconds) after exam end before late submissions are rejected
 LATE_SUBMISSION_GRACE_SECONDS = 60
 
+
+def finalize_expired_sessions(db: Session, *, exam_id: Optional[str] = None, student_id: Optional[str] = None) -> int:
+    """Mark exam sessions as globally submitted once their exam has fully ended.
+
+    This is the server-side safety net for the client-only auto-submit: if a
+    browser never delivered its final POST /exam/{id}/submit (tab closed at the
+    deadline, network failure, request timeout, client-clock drift past the
+    grace window, or an expired JWT), the session would otherwise stay
+    is_submitted=False and show forever as "In Progress" in analytics/monitor.
+
+    It runs lazily from endpoints that already read ExamSession rows during
+    normal usage (student dashboard feed, admin analytics, admin monitor), so no
+    scheduler/worker is needed.
+
+    Safety rules:
+    * Only sessions whose exam satisfied
+        now > starts_at + duration_seconds + LATE_SUBMISSION_GRACE_SECONDS
+      are touched — the exact boundary at which submit_exam would reject a late
+      submission (grace preserved, nothing finalized before the exam truly ends).
+    * A single "UPDATE ... WHERE is_submitted = 0" makes repeat/concurrent
+      execution idempotent; the endpoint call and any racing in-flight browser
+      submit resolve harmlessly either way and no rows are ever inserted.
+    * Only the is_submitted flag is flipped. Submission/subjective payloads,
+      evaluations, violations and all other session data are left untouched —
+      no answers are fabricated or overwritten.
+    """
+    now = time.time()
+    expired_exam_ids = (
+        db.query(Exam.id)
+        .filter(
+            Exam.starts_at + Exam.duration_seconds + LATE_SUBMISSION_GRACE_SECONDS < now
+        )
+    )
+    query = db.query(ExamSession).filter(
+        ExamSession.is_submitted == False,  # noqa: E712
+        ExamSession.exam_id.in_(expired_exam_ids),
+    )
+    if exam_id:
+        query = query.filter(ExamSession.exam_id == exam_id)
+    if student_id:
+        query = query.filter(ExamSession.student_id == student_id)
+
+    finalized = query.update({"is_submitted": True}, synchronize_session=False)
+    if finalized:
+        db.commit()
+    return int(finalized)
+
+
 class SubmissionPayloadSchema(BaseModel):
     mcqs: Dict[str, str] = {}
     coding: Dict[str, Any] = {}
@@ -151,6 +199,11 @@ def get_available_tests(
     )
     if not token_record:
         raise HTTPException(status_code=404, detail="Student record not found.")
+
+    # Server-side fallback for the client-only auto-submit: if the browser
+    # never flushed a final POST for a session whose exam has ended (+ grace),
+    # mark it submitted now so the dashboard does not report it as pending.
+    finalize_expired_sessions(db, student_id=active_session.student_id)
 
     exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
 
