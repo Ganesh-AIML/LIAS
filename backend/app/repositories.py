@@ -1,9 +1,8 @@
 """Thin PyMongo repository layer for the LIAS MongoDB target.
 
 One collection per logical entity (mirroring the PostgreSQL tables). This is
-NOT an ODM and does NOT emulate the SQLAlchemy query API — it is a thin
-durable-CRUD wrapper. Nothing in this module is used by the application yet;
-it is the foundation the routes will consume during the migration swap (G2+).
+NOT an ODM and does NOT emulate the SQLAlchemy query API -- it is a thin
+durable-CRUD wrapper.
 
 ID strategy (parity with PostgreSQL):
     * SQL primary key -> Mongo `_id`.
@@ -17,16 +16,14 @@ JSON-in-TEXT fields (submission_payload, subjective_payload, coding_marks,
 subjective_marks, coding_evaluation, subjective_evaluation) are stored as
 native BSON documents/arrays; null stays null.
 
-Field mapping is schema-driven: `doc_for()` enumerates the SQLAlchemy model's
-columns so a document can never silently omit (or misname) a field and never
-diverges in ID/values from the row that produced it. Hand-maintained literal
-dicts are forbidden for mirroring writes — always derive from the ORM row.
+Field mapping is schema-driven: `doc_for()` enumerates a static column list
+so a document can never silently omit (or misname) a field and never
+diverges in ID/values from the source dict.
 """
 
 import json
 from contextlib import contextmanager
 
-from app import models as _models
 from app.database import get_mongo_client, get_mongo_db
 
 
@@ -63,6 +60,8 @@ class _AttrDict:
         try:
             return self._d[name]
         except KeyError:
+            if name == "id" and "_id" in self._d:
+                return self._d["_id"]
             raise AttributeError(name)
 
     def __getitem__(self, key):
@@ -107,21 +106,47 @@ JSON_DOC_FIELDS = {
     },
 }
 
-# logical table name -> SQLAlchemy model class (schema source for doc_for)
-MODEL_BY_TABLE = {
-    "students": _models.Student,
-    "token_registry": _models.TokenRegistry,
-    "staff_accounts": _models.StaffAccount,
-    "exams": _models.Exam,
-    "exam_sessions": _models.ExamSession,
-    "faculty_evaluations": _models.FacultyEvaluation,
-    "violation_logs": _models.ViolationLog,
-    "questions": _models.Question,
-    "coding_problems": _models.CodingProblem,
-    "test_cases": _models.TestCase,
-    "subjective_questions": _models.SubjectiveQuestion,
-    "sections": _models.Section,
+# Static column schemas per collection (replaces ORM model metadata).
+# Each value is a list of column names in storage order.
+SCHEMAS = {
+    "students": ["id", "name", "password", "is_active", "created_at", "needs_password_reset"],
+    "token_registry": ["token", "exam_id", "student_id", "password_hash", "is_active"],
+    "staff_accounts": ["id", "name", "email", "password_hash", "role", "module", "created_at"],
+    "exams": [
+        "id", "title", "duration_seconds", "starts_at",
+        "start_password_hash", "end_password_hash", "status",
+        "start_secret", "end_secret",
+        "coding_duration_minutes", "mcq_duration_minutes", "qna_duration_minutes",
+        "module",
+    ],
+    "exam_sessions": [
+        "id", "student_id", "exam_id", "session_secret",
+        "is_revoked", "is_submitted", "created_at",
+        "subjective_payload", "submission_payload",
+        "mcq_score", "coding_evaluation", "subjective_evaluation",
+        "total_score", "review_status", "evaluated_at",
+    ],
+    "faculty_evaluations": [
+        "id", "session_id", "faculty_id",
+        "coding_marks", "subjective_marks",
+        "total_score", "review_status", "created_at", "evaluated_at",
+    ],
+    "violation_logs": ["id", "session_id", "student_id", "exam_id", "event_type", "detail", "occurred_at"],
+    "questions": [
+        "id", "exam_id", "section", "text", "optA", "optB", "optC", "optD", "ans",
+        "section_id", "order_index", "marks", "content_format",
+    ],
+    "coding_problems": ["id", "exam_id", "title", "description", "constraints", "languages", "marks"],
+    "test_cases": ["id", "problem_id", "input_data", "expected_output", "is_hidden"],
+    "subjective_questions": [
+        "id", "exam_id", "section", "text", "marks",
+        "section_id", "order_index", "content_format",
+    ],
+    "sections": ["id", "exam_id", "name", "type", "marks_per_question", "order_index"],
 }
+
+# logical table name -> column schema (for doc_for field enumeration)
+MODEL_BY_TABLE = SCHEMAS
 
 
 def enabled():
@@ -153,34 +178,29 @@ def _safe_decode(raw):
 
 
 def doc_for(table, row, *, include_id=True, fields=None):
-    """Build a Mongo document from a SQLAlchemy row (or plain dict).
+    """Build a Mongo document from a plain dict.
 
-    Schema-driven: enumerates the model's column names so field names, nulls,
-    JSON-in-TEXT decoding and the `_id` = PK invariant cannot drift from the
-    source row. This is the ONLY sanctioned way to prepare a mirrored write.
+    Schema-driven: enumerates the static column list so field names, nulls,
+    JSON-in-TEXT decoding and the `_id` = PK invariant cannot drift. This is
+    the ONLY sanctioned way to prepare a mirrored write.
 
     Args:
-        table: logical table name (must exist in MODEL_BY_TABLE).
-        row:   ORM instance or dict keyed by column names.
+        table: logical table name (must exist in SCHEMAS).
+        row:   dict keyed by column names.
         include_id: when True, add `_id` = the PK value (for insert_one).
                    Pass False when the doc is used as an update ($set) target,
                    because `_id` is immutable in MongoDB.
         fields: restrict emission to this column subset (update-only optim).
     """
-    model = MODEL_BY_TABLE.get(table)
-    if model is None:
-        raise KeyError(f"No model registered for table: {table}")
+    columns = SCHEMAS.get(table)
+    if columns is None:
+        raise KeyError(f"No schema registered for table: {table}")
 
-    if isinstance(row, dict):
-        def get(name):
-            return row.get(name)
-    else:
-        def get(name):
-            return getattr(row, name)
+    def get(name):
+        return row.get(name) if isinstance(row, dict) else getattr(row, name, None)
 
     doc = {}
-    for column in model.__table__.columns:
-        name = column.name
+    for name in columns:
         if fields is not None and name not in fields:
             continue
         doc[name] = get(name)

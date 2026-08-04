@@ -11,6 +11,7 @@ Ownership rule, enforced SERVER-side everywhere:
     selected via the "__legacy__" sentinel). Faculty never see legacy marks.
 """
 import uuid
+import time
 from fastapi import HTTPException
 
 from app import repositories as repo
@@ -61,6 +62,7 @@ def get_or_create_faculty_eval(session_id: str, faculty_id: str):
         "subjective_marks": None,
         "total_score": 0,
         "review_status": None,
+        "created_at": time.time(),
         "evaluated_at": None,
     }
     repo.insert_one("faculty_evaluations", new_doc)

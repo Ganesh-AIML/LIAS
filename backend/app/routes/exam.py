@@ -513,11 +513,17 @@ def submit_exam(
         update_fields["submission_payload"] = payload.answers if payload.answers else {}
         if payload.subjective:
             update_fields["subjective_payload"] = payload.subjective
-        repo.update_one(
+        # Atomic check-and-set: only submits if not already submitted (TOCTOU fix)
+        result = repo.find_one_and_update(
             "exam_sessions",
-            {"_id": active_session.id},
-            update_fields,
+            {"_id": active_session.id, "is_submitted": False},
+            {"$set": update_fields},
+            return_document="after",
         )
+        if result is None:
+            raise HTTPException(status_code=400, detail="Exam already submitted.")
+    except HTTPException:
+        raise
     except Exception:
         logger.warning("[EXAM] Mongo write failed for submit_exam")
 

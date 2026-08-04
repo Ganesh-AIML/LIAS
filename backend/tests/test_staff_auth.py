@@ -5,7 +5,6 @@ import time
 import jwt
 import bcrypt
 
-from app.models import StaffAccount
 from app.database import get_mongo_db
 
 

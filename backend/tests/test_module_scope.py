@@ -8,53 +8,43 @@ from app import repositories as repo
 
 
 def _exam(db, eid, module=None, title=None):
-    from app.models import Exam
-    exam = Exam(
-        id=eid,
-        title=title or eid,
-        duration_seconds=3600,
-        starts_at=int((time.time() + 86400) * 1000),
-        status="upcoming",
-        start_password_hash="$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
-        module=module,
-    )
-    db.add(exam)
-    db.commit()
-    get_mongo_db()["exams"].insert_one(dict(repo.doc_for("exams", exam)))
-    return exam
+    mdb = get_mongo_db()
+    doc = repo.doc_for("exams", {
+        "id": eid,
+        "title": title or eid,
+        "duration_seconds": 3600,
+        "starts_at": int((time.time() + 86400) * 1000),
+        "status": "upcoming",
+        "start_password_hash": "$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
+        "module": module,
+    })
+    mdb["exams"].insert_one(doc)
 
 
 def _session(db, sid, exam_id, submitted=True):
-    from app.models import ExamSession
-    session = ExamSession(
-        id=sid,
-        student_id="23-TEST-01",
-        exam_id=exam_id,
-        session_secret="secret",
-        is_submitted=submitted,
-        submission_payload=json.dumps({"mcqs": {}, "coding": {}}),
-    )
-    db.add(session)
-    db.commit()
-    get_mongo_db()["exam_sessions"].insert_one(dict(repo.doc_for("exam_sessions", session)))
-    return session
+    mdb = get_mongo_db()
+    doc = repo.doc_for("exam_sessions", {
+        "id": sid,
+        "student_id": "23-TEST-01",
+        "exam_id": exam_id,
+        "session_secret": "secret",
+        "is_submitted": submitted,
+        "submission_payload": json.dumps({"mcqs": {}, "coding": {}}),
+    })
+    mdb["exam_sessions"].insert_one(doc)
 
 
 def _token(db, token, exam_id, student_id="23-TEST-01"):
-    from app.models import TokenRegistry
-    row = TokenRegistry(
-        token=token,
-        exam_id=exam_id,
-        student_id=student_id,
-        password_hash="$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
-        is_active=True,
-    )
-    db.add(row)
-    db.commit()
-    _doc = dict(repo.doc_for("token_registry", row))
-    _doc["_id"] = token
-    get_mongo_db()["token_registry"].insert_one(_doc)
-    return row
+    mdb = get_mongo_db()
+    doc = repo.doc_for("token_registry", {
+        "token": token,
+        "exam_id": exam_id,
+        "student_id": student_id,
+        "password_hash": "$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
+        "is_active": True,
+    })
+    doc["_id"] = token
+    mdb["token_registry"].insert_one(doc)
 
 
 CREATE_PAYLOAD = {
@@ -397,13 +387,8 @@ class TestSessionScoping:
             headers=faculty_bearer_headers,
         )
         assert response.status_code == 200
-        if repo.enabled():
-            _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_1"})
-            assert _doc["is_revoked"] is True
-        else:
-            from app.models import ExamSession
-            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_1").first()
-            assert s.is_revoked is True
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_1"})
+        assert _doc["is_revoked"] is True
 
     def test_faculty_cannot_grant_cross_module_session(self, client, db, faculty_bearer_headers):
         _exam(db, "exam_cs", module="MAS702")
@@ -418,26 +403,15 @@ class TestSessionScoping:
     def test_faculty_can_grant_own_module_session(self, client, db, faculty_bearer_headers):
         _exam(db, "exam_aiml", module="MAS701")
         _session(db, "sess_aiml_2", "exam_aiml", submitted=False)
-        if repo.enabled():
-            get_mongo_db()["exam_sessions"].update_one({"_id": "sess_aiml_2"}, {"$set": {"is_revoked": True}})
-        else:
-            from app.models import ExamSession
-            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_2").first()
-            s.is_revoked = True
-            db.commit()
+        get_mongo_db()["exam_sessions"].update_one({"_id": "sess_aiml_2"}, {"$set": {"is_revoked": True}})
         response = client.post(
             "/admin/sessions/grant",
             json={"session_id": "sess_aiml_2"},
             headers=faculty_bearer_headers,
         )
         assert response.status_code == 200
-        if repo.enabled():
-            _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_2"})
-            assert _doc["is_revoked"] is False
-        else:
-            from app.models import ExamSession
-            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_2").first()
-            assert s.is_revoked is False
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_2"})
+        assert _doc["is_revoked"] is False
 
 
 # ── EVALUATION SCOPING ─────────────────────────────────────────────────────────
@@ -520,12 +494,8 @@ class TestStaffManagement:
             headers=admin_bearer_headers,
         )
         assert response.status_code == 200
-        if repo.enabled():
-            _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
-            assert _doc["module"] == "MAS702"
-        else:
-            db.refresh(faculty_staff)
-            assert faculty_staff.module == "MAS702"
+        _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
+        assert _doc["module"] == "MAS702"
 
     def test_admin_clears_faculty_module(self, client, db, admin_bearer_headers, faculty_staff):
         response = client.put(
@@ -534,12 +504,8 @@ class TestStaffManagement:
             headers=admin_bearer_headers,
         )
         assert response.status_code == 200
-        if repo.enabled():
-            _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
-            assert _doc["module"] is None
-        else:
-            db.refresh(faculty_staff)
-            assert faculty_staff.module is None
+        _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
+        assert _doc["module"] is None
 
     def test_cannot_assign_module_to_admin(self, client, admin_bearer_headers, admin_staff):
         response = client.put(

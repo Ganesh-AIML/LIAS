@@ -1135,11 +1135,6 @@ def list_exams(
 
         dec_start = "********"
         dec_end = None 
-        try:
-            if exam.start_secret: dec_start = cipher_suite.decrypt(exam.start_secret.encode("utf-8")).decode("utf-8")
-            if exam.end_secret: dec_end = cipher_suite.decrypt(exam.end_secret.encode("utf-8")).decode("utf-8")
-        except Exception as e:
-            logger.warning("Failed to decrypt secrets for exam %s: %s", exam.id, e)
 
         stats = {"total": total_counts.get(exam.id, 0), "submitted": submitted_counts.get(exam.id, 0)}
         result.append({

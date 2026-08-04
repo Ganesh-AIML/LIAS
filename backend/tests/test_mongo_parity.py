@@ -5,7 +5,7 @@ These verify the critical invariant for the Neon -> MongoDB migration:
     SQL row id == Mongo document _id, for EVERY mirrored record.
 
 Since SQL runtime writes have been removed (Phase E), these tests now verify:
-  * doc_for() maps ORM object id onto Mongo _id (identity parity).
+  * doc_for() maps dict id onto Mongo _id (identity parity).
   * exam creation writes correct child trees to Mongo (sections / questions /
     coding_problems / test_cases / subjective_questions).
   * exam update purges old children and inserts new ones in Mongo.
@@ -22,15 +22,6 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 
 from app.database import get_mongo_db
-from app.models import (
-    Exam,
-    Section,
-    Question,
-    CodingProblem,
-    TestCase as TCaseModel,
-    SubjectiveQuestion,
-    StaffAccount,
-)
 from app import repositories as repo
 
 
@@ -117,51 +108,51 @@ def _mongo_child_ids(mdb, coll, exam_id):
 
 
 class TestDocForMappingIdentity:
-    """doc_for() must produce Mongo _id == ORM id and keep scalars scalar."""
+    """doc_for() must produce Mongo _id == dict id and keep scalars scalar."""
 
     def test_doc_for_uses_sql_id_as_mongo_id(self, db):
-        exam = Exam(
-            id="exam_parity_01",
-            title="Mapping Test",
-            duration_seconds=3600,
-            starts_at=time.time(),
-            status="draft",
-            start_password_hash="$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
-        )
+        exam = {
+            "id": "exam_parity_01",
+            "title": "Mapping Test",
+            "duration_seconds": 3600,
+            "starts_at": time.time(),
+            "status": "draft",
+            "start_password_hash": "$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6",
+        }
         doc = repo.doc_for("exams", exam)
-        assert doc["_id"] == exam.id
-        assert doc["id"] == exam.id
+        assert doc["_id"] == exam["id"]
+        assert doc["id"] == exam["id"]
         assert doc["title"] == "Mapping Test"
         assert doc["duration_seconds"] == 3600
         assert doc["module"] is None
         assert doc["end_password_hash"] is None
 
     def test_doc_for_preserves_empty_and_false(self, db):
-        exam = Exam(
-            id="exam_parity_02",
-            title="Empty Fields",
-            duration_seconds=0,
-            starts_at=0.0,
-            status="draft",
-            start_password_hash="x",
-            module=None,
-        )
+        exam = {
+            "id": "exam_parity_02",
+            "title": "Empty Fields",
+            "duration_seconds": 0,
+            "starts_at": 0.0,
+            "status": "draft",
+            "start_password_hash": "x",
+            "module": None,
+        }
         doc = repo.doc_for("exams", exam)
         assert doc["duration_seconds"] == 0
         assert doc["starts_at"] == 0.0
 
     def test_doc_for_excludes_primary_key_via_include_id_false(self, db):
-        exam = Exam(
-            id="exam_parity_03",
-            title="Partial",
-            duration_seconds=3600,
-            starts_at=time.time(),
-            status="draft",
-            start_password_hash="h",
-        )
+        exam = {
+            "id": "exam_parity_03",
+            "title": "Partial",
+            "duration_seconds": 3600,
+            "starts_at": time.time(),
+            "status": "draft",
+            "start_password_hash": "h",
+        }
         doc = repo.doc_for("exams", exam, include_id=False)
         assert "_id" not in doc
-        assert doc["id"] == exam.id
+        assert doc["id"] == exam["id"]
         assert doc["title"] == "Partial"
 
 

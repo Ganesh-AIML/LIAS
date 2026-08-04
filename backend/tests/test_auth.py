@@ -76,7 +76,6 @@ class TestJoinExam:
 
     def test_join_rejects_deactivated_student(self, client, db, sample_token, sample_student):
         sample_student.is_active = False
-        db.commit()
         get_mongo_db()["students"].update_one(
             {"_id": sample_student.id}, {"$set": {"is_active": False}}
         )

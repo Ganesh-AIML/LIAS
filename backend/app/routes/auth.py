@@ -170,7 +170,7 @@ def logout_session(
 
 
 @router.post("/refresh-token")
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 def refresh_token(
     request: Request,
     active_session=Depends(verify_session_guard),

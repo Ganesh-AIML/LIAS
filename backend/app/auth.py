@@ -74,7 +74,29 @@ def verify_session_guard(
         _doc = repo.find_one("exam_sessions", {"_id": session_id})
         session_record = _AttrDict(_doc) if _doc else None
 
-        if not session_record or session_record.is_revoked:
+        if not session_record:
+            logger.warning(
+                "verify_session_guard: session %s not found", session_id
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session is invalid or has been revoked.",
+                headers={"WWW-Authenticate": 'Bearer error="SESSION_REVOKED"'},
+            )
+
+        # IDOR: bind session to the JWT subject (student_id).
+        jwt_sub = payload.get("sub")
+        if jwt_sub and session_record.student_id != jwt_sub:
+            logger.warning(
+                "verify_session_guard: student_id mismatch token=%s session=%s",
+                jwt_sub, session_record.student_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Session does not belong to this student.",
+            )
+
+        if session_record.is_revoked:
             # AUD-011: revoked/invalid session is distinct from a bad token.
             # Use 401 + a machine-readable code so the frontend interceptor can
             # show a "session revoked" modal instead of a silent hard redirect.
