@@ -1,4 +1,4 @@
-# LIAS — Learning Integrated Assessment System
+# LIAS — Live Interview Assessment System
 
 **AI-proctored online examination platform for secure, scalable assessments.**
 
@@ -10,12 +10,12 @@
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React_19-61DAFB?logo=react&logoColor=black)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
-![Python](https://img.shields.io/badge/Python_3.12-3776AB?logo=python&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.11-3776AB?logo=python&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-000000?logo=jsonwebtokens&logoColor=white)
 ![TensorFlow.js](https://img.shields.io/badge/TensorFlow_JS-FF6F00?logo=tensorflow&logoColor=white)
-![License](https://img.shields.io/badge/License-Not%20Specified-lightgrey)
+![Socket.IO](https://img.shields.io/badge/Socket.IO-010101?logo=socket.io&logoColor=white)
 
 </div>
 
@@ -23,387 +23,576 @@
 
 ## Table of Contents
 
-- [Project Overview](#project-overview)
-- [Features](#features)
-- [Architecture Overview](#architecture-overview)
-- [Technology Stack](#technology-stack)
-- [Repository Structure](#repository-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Question Import](#question-import)
-- [API Overview](#api-overview)
-- [Database](#database)
-- [Security](#security)
-- [Screenshots](#screenshots)
-- [Testing](#testing)
-- [Known Limitations](#known-limitations)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+- [1. Project Overview](#1-project-overview)
+- [2. System Services / Modules](#2-system-services--modules)
+- [3. User Types / Roles](#3-user-types--roles)
+- [4. Features](#4-features)
+- [5. System Design / Architecture](#5-system-design--architecture)
+- [6. Main Workflows](#6-main-workflows)
+- [7. Exam Lifecycle](#7-exam-lifecycle)
+- [8. Proctoring Workflow](#8-proctoring-workflow)
+- [9. Evaluation Workflow](#9-evaluation-workflow)
+- [10. Repository / File Structure](#10-repository--file-structure)
+- [11. Technology Stack](#11-technology-stack)
+- [12. Environment Variables](#12-environment-variables)
+- [13. Local Setup](#13-local-setup)
+- [14. Running the System](#14-running-the-system)
+- [15. Production Build](#15-production-build)
+- [16. Testing](#16-testing)
+- [17. Database Architecture](#17-database-architecture)
+- [18. Security](#18-security)
+- [19. Developer Handover Notes](#19-developer-handover-notes)
 
 ---
 
-## Project Overview
+## 1. Project Overview
 
-LIAS is a full-stack online examination platform designed for secure and scalable assessments. It combines a modern React frontend with a FastAPI backend, PostgreSQL database, and client-side AI proctoring to deliver a robust remote examination solution.
+LIAS (Live Interview Assessment System) is a full-stack, AI-proctored online
+examination platform for secure, scalable remote assessments. It combines a
+React single-page application with a FastAPI backend and MongoDB (Atlas) as the
+authoritative runtime datastore.
 
 ### What problem does it solve?
 
-Traditional in-person exams face logistical challenges — venue capacity, invigilator availability, and geographic constraints. LIAS enables institutions to conduct **secure remote assessments** with real-time proctoring, automated MCQ grading, and a structured evaluation workflow for subjective and coding questions.
+Traditional in-person exams face logistical challenges — venue capacity,
+invigilator availability, and geographic constraints. LIAS lets institutions
+conduct secure remote assessments with:
 
-### Target users
+- real-time, client-side AI proctoring (face, object, and environment checks),
+- automated MCQ grading,
+- a structured manual evaluation workflow for coding and subjective answers,
+- live exam monitoring and session control for invigilators.
 
-- **Educational institutions** — universities, colleges, and training providers
-- **Certification bodies** — organizations conducting credentialing exams
-- **Administrators** — manage exams, students, proctoring, and evaluation
-- **Students** — attempt proctored exams with a structured workspace
+### What type of system is it?
 
-### Primary objectives
+A client-server web application consisting of:
 
-- Provide a **secure**, **scalable** platform for remote assessments
-- Prevent cheating through **AI-powered proctoring** and browser-level enforcement
-- Support **multiple question types**: MCQs, coding problems, and subjective answers
-- Streamline **evaluation workflows** with auto-grading and manual review
-- Enable **real-time monitoring** of live exams
+- a **React 19 SPA** frontend (student workspace, admin dashboard, faculty portal),
+- a **FastAPI** backend exposing a REST API plus a Socket.IO server for real-time events,
+- a **MongoDB** datastore accessed through a thin repository layer (no ORM/ODM).
 
----
-
-## Features
-
-### Assessment Management
-
-| Feature | Description |
-|---------|-------------|
-| Exam lifecycle | Create, edit, schedule, publish, and archive exams |
-| Multi-part exams | Combine MCQ sections, coding problems, and subjective questions in a single exam |
-| Configurable durations | Independent timing for MCQ, coding, and subjective sections |
-| Start/end passwords | Deferred two-password exam entry and exit system (encrypted via Fernet) |
-| Exam duplication | Full exam content is purged and replaced on update (PUT semantics) |
-
-### Question Bank
-
-| Feature | Description |
-|---------|-------------|
-| LaTeX/ZIP import | Upload a `.zip` containing `questions.tex` and images for bulk question import |
-| Three question types | MCQ (`\begin{choices}` + `\answer{}`), subjective (`\begin{question}`), coding (`\begin{codingquestion}` + `\testcase{}`) |
-| Rich text authoring | TipTap-based editor for subjective questions with LaTeX math support |
-| Coding problem builder | UI for creating coding problems with title, description, constraints, and test cases |
-| Markdown rendering | Questions rendered via ReactMarkdown with KaTeX math typesetting |
-
-### AI Proctoring
-
-| Feature | Description |
-|---------|-------------|
-| Face detection | MediaPipe FaceLandmarker for head pose estimation (yaw detection) |
-| Object detection | TensorFlow.js + COCO-SSD to detect phones, books, laptops, and multiple faces |
-| Camera obstruction | Luminance sampling to detect camera covered or shutter closed |
-| Self-healing pipeline | Automatic fallback from GPU to CPU on WebGL failure |
-| Three-stage lifecycle | `preparing` → `observation` → `enforcement` with escalating responses |
-
-### Anti-Cheating Enforcement
-
-| Feature | Description |
-|---------|-------------|
-| Fullscreen enforcement | Overlay prevents exiting fullscreen during exam |
-| Tab-switch detection | Logs violations when student navigates away |
-| Keyboard shortcut blocking | Blocks F12, F5, F11, Ctrl+U/P/S/A/C/X/V, Ctrl+Shift+I/J/C |
-| Copy/paste prevention | Disabled via browser event blocking |
-| Devtools blocking | Detects and logs devtool openings |
-| Context menu disabled | Right-click disabled during exam |
-| Back navigation blocked | `popstate` handler prevents browser back |
-
-### Evaluation & Analytics
-
-| Feature | Description |
-|---------|-------------|
-| Auto-graded MCQs | Scores calculated automatically on submission |
-| Manual coding evaluation | Per-problem mark entry with review status workflow |
-| Manual subjective evaluation | Per-question mark entry with review status workflow |
-| Assignment-level scoring | Separate MCQ, coding, and subjective scores with total aggregation |
-| Review workflow | Status tracking: unreviewed → reviewed, with clear option |
-| Analytics dashboard | Per-exam overview with score distribution, evaluation progress, and leaderboard |
-
-### Student & Session Management
-
-| Feature | Description |
-|---------|-------------|
-| Master student directory | Centralized student records with password reset and cross-exam sync |
-| Exam token system | Each student receives a unique token for each exam |
-| Session lifecycle | Create → join → attempt → submit — with revocation and grace period |
-| Live proctoring monitor | Admin dashboard showing active sessions, violation counts, and per-student details |
-| Session controls | Admin can revoke (kick-out) or unlock (grant) any session |
-
-### Security
-
-| Feature | Description |
-|---------|-------------|
-| JWT authentication | HS256-signed tokens with configurable expiry and refresh |
-| Input validation | Pydantic models with regex, length limits, and type enforcement |
-| Rate limiting | SlowAPI: 5/min on login, 10/min on token refresh and admin mutations |
-| Password encryption | bcrypt for student passwords; Fernet for exam passwords at rest |
-| Session revocation | Re-login automatically revokes old session; duplicate submission prevented |
-| CORS | Configurable allowed origins via environment variable |
+> **Note on naming:** the repository is named LIAS. The FastAPI application is
+> internally titled *"S.C.O.P.E. Assessment Gateway"* (`backend/app/main.py`),
+> a legacy internal name retained in code.
 
 ---
 
-## Architecture Overview
+## 2. System Services / Modules
+
+The system is organised into the following services/modules (all implemented
+inside `backend/app/` and `frontend/src/`):
+
+| Service / Module | Where | Responsibility |
+|---|---|---|
+| **Authentication & Authorization Service** | `app/auth.py`, `app/routes/auth.py`, `app/routes/staff_auth.py` | Student join/login (exam token + password), JWT issuance/refresh/revocation, staff (admin/faculty) login, self-registration of faculty accounts |
+| **Student Examination Service** | `app/routes/exam.py` | Workspace content delivery, start/end password gates, submission, code-run stubs, session status polling |
+| **Admin Management Service** | `app/routes/admin.py` | Exam CRUD, student/token management, master student directory, session revoke/grant, live monitoring, analytics, staff & module administration |
+| **Faculty Evaluation Service** | `app/routes/evaluate.py`, `app/evaluation_ctx.py` | Faculty-owned coding/subjective marking, review statuses, admin context switching |
+| **Proctoring Service** | `frontend/src/proctoring/` (client-side) + `app/routes/exam.py` (violation endpoints) | Client-side AI detection pipeline (TensorFlow.js COCO-SSD, MediaPipe FaceLandmarker); violation logging and auto-revocation server-side |
+| **Evaluation Service** | `app/routes/evaluate.py` | MCQ auto-scoring, manual coding/subjective scoring, review workflow |
+| **Analytics / Monitoring Service** | `app/routes/admin.py` (analytics, live monitor), `frontend/src/pages/admin/views/` | Per-exam score distribution, evaluation progress, leaderboard, live session monitoring |
+| **MongoDB Repository / Data Layer** | `app/repositories.py`, `app/database.py`, `app/mongo_indexes.py` | Thin PyMongo CRUD wrapper, collection/schema map, index management, transactions |
+| **WebSocket / Real-time Service** | `app/main.py` (Socket.IO server), `frontend/src/pages/ExamWorkspace.jsx`, `frontend/src/hooks/useTrueTime.js` | JWT-validated exam rooms; server-time sync; frontend contract for duration adjustments |
+
+---
+
+## 3. User Types / Roles
+
+| Role | Authenticated via | Permissions |
+|---|---|---|
+| **Student** | `/auth/join` with exam token + password → session JWT | Join an assigned exam, take the exam (workspace, passwords, submission), see available tests and past results. Cannot access admin endpoints. |
+| **Admin** | `/admin/auth/login` (staff JWT, `role=admin`) | Full platform administration: exam CRUD for any module, student/token management, master student directory, session revoke/grant, live monitoring, analytics, faculty account management and module assignment. **Evaluation writes are faculty-only** — admins are read-only in the evaluation workflow, but may switch between faculty evaluation contexts. |
+| **Faculty** | `/admin/auth/faculty-login` (staff JWT, `role=faculty`) | Module-scoped access only: can create/update exams **within their assigned module**, view analytics/monitor for their module's exams, revoke/grant sessions for their module, and **write** coding/subjective evaluations for their module's students. Cannot manage master students, staff accounts, modules, or any other module's exams. |
+
+### Role distinction rules (server-enforced)
+
+- Every request re-reads the staff account from MongoDB, so role/module changes
+  apply immediately (`verify_admin` in `app/routes/admin.py`).
+- `require_admin` gates platform-level management (master students, staff,
+  module assignment) to `role=admin` only.
+- `require_exam_scope` gates all exam-scoped resources: admins pass
+  unconditionally; faculty pass only when a module is assigned **and**
+  `exam.module == faculty.module`.
+- Faculty registration is public but creates **pending** accounts
+  (`module=NULL`); an admin must assign a module before the faculty account
+  can access anything.
+- Evaluation mutations (`save_evaluation`, `clear_evaluation`,
+  `set_review_status`) call `ensure_faculty_writer` — faculty only.
+
+---
+
+## 4. Features
+
+### Authentication & Sessions
+
+- Student join with unique per-exam token + bcrypt-hashed password
+  (`token_registry`), with timing-safe dummy-hash to prevent user enumeration.
+- HS256 JWT sessions bound to `session_id`, `exam_id`, and `student_id`;
+  IDOR check on every request.
+- JWT refresh (`/auth/refresh-token`) recomputed from the exam's current
+  duration so active sessions stay alive through pre-exam and mid-exam
+  duration changes.
+- Atomic re-login: joining again revokes the previous session (no double-login).
+- Student password change (`/auth/update-password`), logout.
+- Staff login for admins and faculty; public faculty self-registration
+  (pending until module assigned).
+
+### Exam Management
+
+- Create/update/delete exams with MCQ sections, coding problems (with test
+  cases), and subjective questions; section metadata (type, marks, order).
+- Scheduling with `starts_at`, total duration, and optional per-section
+  durations (MCQ / coding / QnA).
+- Start/end exam passwords (bcrypt hashed; Fernet-encrypted copies at rest
+  for admin re-display).
+- Draft/upcoming/live/completed lifecycle (see [Exam Lifecycle](#7-exam-lifecycle)).
+- Exam content is replaced wholesale on update (PUT semantics) inside a Mongo
+  transaction.
+- LaTeX/ZIP question-bank import (`TexZipImporter.jsx`, template files in the
+  repo root: `questions.tex`, `template_mcq.tex`, `template_subjective.tex`).
+
+### Student Enrollment & Tokens
+
+- Master student directory (central records, active flag, password reset).
+- Per-exam enrollment: bulk-create students, assign students to an exam, and
+  generate unique tokens (`LIAS_<STUDENT_ID>_<HEX>`).
+- Reset-and-resync of a master student (password reset + token resync).
+
+### Exam Workspace (Student)
+
+- Database-driven workspace: MCQs grouped into sections, coding problems,
+  subjective questions (plain or markdown content with KaTeX math).
+- Server-synced countdown (`useTrueTime` NTP-style offset + Socket.IO).
+- Start/end password gates; auto-submit on expiry; local draft caching
+  (IndexedDB / sessionStorage).
+- Monaco editor for coding; TipTap rich-text + MathLive for subjective
+  answers; ReactMarkdown + KaTeX rendering.
+- Fullscreen enforcement, keyboard shortcut blocking, copy/paste prevention,
+  devtools detection, context-menu disable, back-navigation blocking.
+
+### Proctoring
+
+- Client-side AI pipeline: MediaPipe FaceLandmarker (head pose / face
+  absence), TensorFlow.js COCO-SSD (phones, books, laptops, multiple faces),
+  luminance sampling for covered/shuttered cameras.
+- Self-healing pipeline (GPU→CPU fallback; degradation surfaces as
+  `proctor_engine_degraded` / `face_absent` events instead of silent failure).
+- Violation events logged server-side; 3 violations auto-revokes the session.
+- Admin live monitor with per-session violation breakdown; revoke (kick out)
+  and grant (unlock) controls.
+
+### Evaluation
+
+- Automatic MCQ scoring from the submission payload.
+- Faculty-owned coding and subjective marks (`faculty_evaluations` collection)
+  with totals recomputed as `MCQ + coding + subjective`.
+- Review statuses: `pending`, `reviewed`, `flagged` (and clear).
+- Admin read-only view with faculty context switching; legacy ownerless marks
+  shown only when no faculty-owned evaluation exists.
+
+### Analytics & Monitoring
+
+- Per-exam analytics: students, scores (MCQ/coding/subjective/total), review
+  status, evaluation progress, leaderboard, faculty context.
+- Live test monitor: active sessions, violation counts, student detail.
+
+---
+
+## 5. System Design / Architecture
+
+MongoDB is the **authoritative runtime database**. There is no SQL datastore
+(SQLAlchemy, SQLite, or PostgreSQL/Neon) anywhere in the runtime — the backend
+is Mongo-only.
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                    Browser (React SPA)                     │
-│  ┌──────────┐  ┌──────────┐  ┌─────────────────────────┐  │
-│  │  UI       │  │ Monaco   │  │  Proctoring Engine      │  │
-│  │  (Tailwind│  │ Editor   │  │  (TensorFlow.js +       │  │
-│  │   + Lucide│  │          │  │   MediaPipe + COCO-SSD) │  │
-│  │   + KaTeX)│  │ TipTap   │  │                         │  │
-│  │           │  │ (RTE)    │  │  Face / Object / Pose   │  │
-│  │ ReactMark │  │ MathLive │  │  Detection              │  │
-│  │ down      │  │ (Equ.Ed) │  └──────────┬──────────────┘  │
-│  └───────────┘  └──────────┘             │                  │
-│         │              │                 │                  │
-│         └──────┬───────┘                 │                  │
-│                │                         │                  │
-│         Axios REST + Socket.IO           │ (client-side)    │
-└────────────────┼─────────────────────────┼──────────────────┘
-                 │                         │
-                 ▼                         ▼
-┌──────────────────────────────────────────────┐
-│              FastAPI Backend                  │
-│                                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │ Auth     │  │ Exam     │  │ Admin    │   │
-│  │ Routes   │  │ Routes   │  │ Routes   │   │
-│  │          │  │          │  │          │   │
-│  │ JWT +    │  │ Session  │  │ CRUD +   │   │
-│  │ bcrypt   │  │ Mgmt     │  │ Monitor  │   │
-│  └──────────┘  └──────────┘  └──────────┘   │
-│                                              │
-│  ┌──────────────────────────────────────┐    │
-│  │  SQLAlchemy ORM + Pydantic Models    │    │
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  Socket.IO Server (real-time clock sync)     │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│          PostgreSQL (Neon.tech)              │
-│                                              │
-│  Students │ Exams │ Sessions │ Questions     │
-│  Violations │ Coding Problems │ Test Cases  │
-│  Subjective Questions │ Sections             │
-│  Token Registry │ Master Directory           │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                   Browser (React 19 SPA)                     │
+│  ┌────────────┐ ┌────────────┐ ┌──────────────────────────┐  │
+│  │ Student UI │ │ Admin UI   │ │  Proctoring Engine       │  │
+│  │ /join,     │ │ / (root)   │ │  (TensorFlow.js COCO-SSD │  │
+│  │ /precheck, │ │ + views    │ │   + MediaPipe + luminance│  │
+│  │ /dashboard │ │ Faculty    │ │   sampling)              │  │
+│  │ /workspace │ │ Portal     │ └───────────┬──────────────┘  │
+│  └─────┬──────┘ └─────┬──────┘             │ (client-side)   │
+│        │              │                    │                 │
+│        └────── Axios (REST) ───────────────┤                 │
+│        └────── Socket.IO (real-time) ──────┘                 │
+└───────────────┬─────────────────────────────┬────────────────┘
+                │                             │
+                ▼                             ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend (Uvicorn)                 │
+│                                                              │
+│  /auth  /exam  /admin (admin, evaluate, staff_auth routers)  │
+│                                                              │
+│  auth.py (JWT guards) ── limiter.py (SlowAPI) ── CORS        │
+│                                                              │
+│  Socket.IO server: connect + join_exam_room (JWT-validated)  │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │          Repository Layer (repositories.py)            │  │
+│  │  find / find_all / update / insert / aggregate /       │  │
+│  │  find_one_and_update / delete / mongo_transaction      │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+└─────────────────────────────┼────────────────────────────────┘
+                              │ PyMongo (driver)
+                              ▼
+                  ┌──────────────────────┐
+                  │   MongoDB (Atlas)    │
+                  │ 12 collections       │
+                  │ (see Database §17)   │
+                  └──────────────────────┘
 ```
 
-### Data flow
+### Architectural boundaries
 
-1. **Admin** creates exams via the admin dashboard — content is stored in PostgreSQL.
-2. **Students** receive exam tokens and join via `/auth/join` — JWT issued on success.
-3. **Pre-exam check** validates browser capabilities (camera, microphone, network, fullscreen).
-4. **Exam workspace** loads questions via `/exam/{id}` and renders them in a locked-down environment.
-5. **Proctoring engine** runs entirely client-side — violations are reported via `/exam/violation`.
-6. **Submission** stores answers immediately; MCQ scores are auto-calculated.
-7. **Evaluation** is performed by admins through the analytics dashboard.
-8. **Socket.IO** synchronizes server time for countdown accuracy across sessions.
+- **Frontend → Backend**: REST via Axios (JWT in `Authorization` header),
+  plus Socket.IO for real-time events. All proctoring ML runs client-side —
+  **no video stream is sent to the server**; only structured violation events.
+- **Backend → Data**: FastAPI routes never touch PyMongo directly — all
+  persistence goes through the repository layer (`app/repositories.py`), which
+  owns the collection map, field schemas, JSON-to-BSON decoding, and
+  transactions.
+- **Auth**: student session JWTs (`sub` = student id, `session_id`,
+  `exam_id`); staff JWTs (`sub` = staff id only; role/module re-read from DB
+  per request).
+- **WebSocket**: Socket.IO ASGI app wrapping the FastAPI app; clients join an
+  exam room only after JWT validation (`verify_socket_token`).
 
 ---
 
-## Technology Stack
+## 6. Main Workflows
+
+### Student Workflow
+
+```
+Join (/auth/join: token + password)
+  → Pre-exam check (/precheck: camera, mic, network, fullscreen, ML models)
+  → Dashboard (/dashboard: available tests + past results)
+  → Exam selection (GET /exam/student/available-tests)
+  → Workspace (GET /exam/{id}) — blocked until starts_at, blocked after submission
+  → Start-password gate (POST /exam/{id}/verify-password)
+  → Exam workspace with proctoring + server-synced timer
+  → Submission (POST /exam/{id}/submit) — atomic, single-submit, grace-window enforced
+  → Completion (available-tests reflects submitted exams; expired sessions
+    finalized server-side as a safety net)
+```
+
+Session tokens are refreshed periodically via `/auth/refresh-token`; the lock
+screen polls `/exam/session-status` to detect admin revocation (401) or grant.
+
+### Admin Workflow
+
+```
+Login (/admin/auth/login → staff JWT; legacy X-Admin-Token only pre-seed)
+  → Admin dashboard (root route "/")
+  → Exam management (create/update/delete, schedule, passwords, sections)
+  → Student management (bulk create, master directory, reset/resync)
+  → Enrollment/token management (assign students to exams → LIAS_* tokens)
+  → Live monitoring (Live Test Monitor: sessions, violations, revoke/grant)
+  → Analytics (per-exam scores, evaluation progress, leaderboard)
+  → Faculty management (list staff, assign modules)
+```
+
+### Faculty Workflow
+
+```
+Login (/admin/auth/faculty-login) — or self-register then await module assignment
+  → Module-scoped access (own module only; pending accounts get 403)
+  → Exam management within module (create/update exams)
+  → Evaluation portal (GET /admin/exams/{id}/evaluate)
+  → Open a student session (GET .../evaluate/{session_id})
+  → Enter coding/subjective marks (POST .../evaluate/{session_id})
+  → Set review status / clear marks (faculty-owned rows only)
+```
+
+---
+
+## 7. Exam Lifecycle
+
+Exam status is **computed from server time**, never from the browser
+(`compute_exam_status` in `app/routes/admin.py`):
+
+| Status | Meaning | Condition |
+|---|---|---|
+| `draft` | Not yet scheduled; created with `status=draft` | stored status `draft` |
+| `upcoming` | Scheduled for the future | stored `status != draft` and `starts_at > now` |
+| `live` | Currently running | `starts_at <= now <= starts_at + duration_seconds` |
+| `completed` | Over | `now > starts_at + duration_seconds` |
+
+Transition rules enforced in code:
+
+- **draft → upcoming/live**: the admin schedules the exam (`starts_at`); a
+  `draft` exam never becomes visible to students automatically.
+- **upcoming → live**: automatic once `starts_at` passes — students can load
+  the workspace and verify passwords only after `starts_at` (403 otherwise).
+- **live → completed**: automatic once `starts_at + duration_seconds` passes;
+  submissions are rejected after `end + 60s` grace (`LATE_SUBMISSION_GRACE_SECONDS`).
+- **Sessions**: `finalize_expired_sessions` marks any session
+  `is_submitted=True` once its exam has fully ended (safety net for missed
+  client auto-submits). It is invoked lazily from `available-tests` and
+  admin exam listing.
+- **Content lock**: an exam can only be **edited** while in `draft` or
+  `upcoming` status — editing a `live`/`completed` exam returns 409
+  ("Questions are locked once an exam goes live"). Deletion is allowed at any
+  status and cascades (sessions, violations, evaluations, questions, coding
+  problems, test cases, sections, token registry) inside one transaction.
+
+---
+
+## 8. Proctoring Workflow
+
+- **What is monitored (client-side)**: face presence and head pose (MediaPipe
+  FaceLandmarker), prohibited objects — phones, books, laptops, multiple faces
+  (TensorFlow.js COCO-SSD), camera obstruction (luminance sampling),
+  fullscreen state, tab switches, copy/paste, devtools, right-click,
+  keyboard shortcuts.
+- **When monitoring begins**: after the pre-exam check passes and the student
+  enters the exam workspace; the engine runs continuously in a
+  `preparing → observation → enforcement` lifecycle.
+- **What is recorded**: the engine posts structured events to
+  `POST /exam/violation` with `event_type` (one of `ALLOWED_EVENTS` in
+  `app/routes/exam.py`) and a detail string. Server-side, violations are
+  stored in the `violation_logs` collection with session/student/exam
+  references and a timestamp.
+- **Auto-enforcement**: when a session reaches **3 violations**, the server
+  automatically revokes it (`is_revoked=True`), which blocks further exam
+  requests (401 `SESSION_REVOKED`).
+- **How admins monitor**: the Live Test Monitor endpoint
+  (`GET /admin/exams/{id}/monitor`) lists active sessions with violation
+  counts; `GET /exam/violation/count` gives the per-event breakdown for the
+  student's lock screen.
+- **Session control**: admins can revoke a session (`/admin/sessions/revoke`,
+  which also finalizes the session as submitted) or grant access back
+  (`/admin/sessions/grant`); the student lock screen polls
+  `/exam/session-status` and refreshes on grant.
+
+---
+
+## 9. Evaluation Workflow
+
+### MCQ automatic evaluation
+
+On submission the raw answers are stored in `exam_sessions.submission_payload`.
+MCQ scores are recomputed server-side (`_compute_mcq_score` in
+`app/routes/evaluate.py`) against the question answer keys and written to
+`exam_sessions.mcq_score`. No client-computed score is ever trusted.
+
+### Coding evaluation
+
+Coding answers are stored in `submission_payload.coding` (code + language).
+Code execution is **not available** (`/exam/{id}/run` is a stub returning
+"unavailable"): faculty enter per-problem marks manually through the
+evaluation portal (`/admin/exams/{id}/evaluate/{session_id}`).
+
+### Subjective evaluation
+
+Subjective answers are stored in `exam_sessions.subjective_payload` (markdown,
+validated server-side — HTML rejected, 10k char limit). Faculty enter
+per-question marks manually with the same evaluation endpoint.
+
+### Faculty ownership
+
+Each faculty's marks live in their own `faculty_evaluations` row
+(`session_id` + `faculty_id` unique). Writes are faculty-only
+(`ensure_faculty_writer`); the identity always comes from the validated staff
+JWT — client-supplied `faculty_id` is never trusted for faculty.
+
+### Admin override / context switching
+
+Admins are read-only in evaluation. The evaluation context resolver
+(`resolve_context` in `app/evaluation_ctx.py`) lets an admin view any faculty
+assigned to the exam's module, or legacy ownerless marks (stored directly on
+`exam_sessions`) via the `__legacy__` sentinel — legacy marks are shown only
+when no faculty-owned evaluation exists. The default selection is the
+earliest-evaluating faculty for the exam.
+
+---
+
+## 10. Repository / File Structure
+
+```text
+LIAS/
+├── backend/                            # FastAPI Python backend
+│   ├── app/
+│   │   ├── main.py                     # App entry, lifespan (indexes + admin seed), CORS, Socket.IO
+│   │   ├── database.py                 # PyMongo client/db singletons (Mongo-only)
+│   │   ├── auth.py                     # JWT creation/validation, session guard, socket token guard
+│   │   ├── repositories.py             # Thin PyMongo CRUD repository layer (schemas, transactions)
+│   │   ├── mongo_indexes.py            # Mongo index definitions + ensure_mongo_indexes()
+│   │   ├── limiter.py                  # SlowAPI rate limiter instance
+│   │   ├── module_codes.py             # Canonical module registry (MAS701–MAS709)
+│   │   ├── evaluation_ctx.py           # Faculty-evaluation context resolution & ownership rules
+│   │   └── routes/
+│   │       ├── auth.py                 # /auth/* (join, logout, refresh, update-password, health)
+│   │       ├── exam.py                 # /exam/* (workspace, verify-password, submit, violation, run stubs)
+│   │       ├── admin.py                # /admin/* (exams, students, monitor, analytics, sessions, staff)
+│   │       ├── evaluate.py             # /admin/exams/*/evaluate/* (faculty evaluation)
+│   │       └── staff_auth.py           # /admin/auth/* (admin/faculty login, faculty register)
+│   ├── scripts/
+│   │   ├── probe_databases.py          # Ops-only diagnostic: probes Mongo (+ optional Neon read-only)
+│   │   └── verify_indexes.py           # Ops-only: verifies live Mongo indexes against MONGO_INDEXES
+│   ├── tests/                          # pytest suite (150 tests, Mongo test DB)
+│   │   ├── conftest.py                 # Fixtures: isolated lias_test DB, client, staff/exam samples
+│   │   ├── test_auth.py                # Student auth flow, rate limiting, revocation
+│   │   ├── test_admin.py               # Admin guards, exam/student CRUD
+│   │   ├── test_staff_auth.py          # Staff login, faculty registration, module assignment, admin seed
+│   │   ├── test_module_scope.py        # Module-based authorization matrix
+│   │   ├── test_evaluate.py            # Evaluation endpoints
+│   │   ├── test_faculty_eval_ownership.py  # Faculty ownership + admin context switching
+│   │   ├── test_expired_finalize.py    # Expired-session finalization safety net
+│   │   ├── test_failure_recovery.py    # Idempotency, concurrency, JWT tamper, partial failures
+│   │   └── test_mongo_parity.py        # Repository doc_for()/schema parity invariants
+│   ├── requirements.txt                # Python dependencies
+│   ├── pyproject.toml                  # pytest + coverage configuration
+│   └── .env.example                    # Backend environment template
+│
+├── frontend/                           # React 19 SPA
+│   ├── src/
+│   │   ├── main.jsx                    # React entry point
+│   │   ├── App.jsx                     # Router + route guards (/join /precheck /dashboard /workspace)
+│   │   ├── index.css                   # Tailwind imports
+│   │   ├── services/api.js             # Axios instances with JWT + revocation-aware interceptors
+│   │   ├── store/authStore.js          # Zustand auth store (in-memory JWT)
+│   │   ├── hooks/                      # useAdminApi, useEvaluateApi, useTrueTime (server clock)
+│   │   ├── pages/
+│   │   │   ├── StudentAuth.jsx         # Student join
+│   │   │   ├── PreExamCheck.jsx        # Readiness gate (camera/mic/network/fullscreen/ML)
+│   │   │   ├── StudentDashboard.jsx    # Available tests + past results
+│   │   │   ├── ExamWorkspace.jsx       # Locked-down exam UI (timers, proctoring, submission)
+│   │   │   └── admin/
+│   │   │       ├── AdminDashboard.jsx  # Admin shell
+│   │   │       ├── AuthPage.jsx        # Admin/faculty login
+│   │   │       ├── FacultyPortal.jsx   # Faculty evaluation portal
+│   │   │       └── views/              # AdminMainView, ScheduleTest, LiveTestMonitor,
+│   │   │                               # AnalyticsView, StudentDirectory, FacultyManagement,
+│   │   │                               # UpcomingTestPreview, CodingProblemBuilder
+│   │   ├── components/
+│   │   │   ├── admin/                  # AdminNav, CodingEvaluator, SubjectiveEvaluator, TexZipImporter
+│   │   │   ├── exam/                   # QuestionRenderer, AnswerRenderer, SubjectiveEditor, MathInputPopover
+│   │   │   └── ui/                     # LiveCountdown, etc.
+│   │   ├── proctoring/
+│   │   │   ├── engine.js               # AI detection pipeline (TF.js + MediaPipe) singleton
+│   │   │   ├── readiness.js            # Proctoring readiness gate
+│   │   │   └── useProctoring.js        # React hook for engine lifecycle
+│   │   ├── extensions/                 # TipTap custom math node
+│   │   └── utils/normalizeMath.js      # LaTeX normalization
+│   ├── public/                         # Logo, favicon, icons
+│   ├── index.html
+│   ├── vite.config.js                  # Vite + KaTeX font static copy
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   ├── eslint.config.js
+│   ├── package.json
+│   └── .env.example                    # VITE_API_URL template
+│
+├── README.md                           # This file
+├── implementation-plan.md              # Historical planning doc (informational only)
+├── questions.tex / template_mcq.tex / template_subjective.tex  # Question-import format templates
+└── .gitignore
+```
+
+---
+
+## 11. Technology Stack
 
 ### Frontend
 
 | Technology | Purpose |
-|------------|---------|
-| [React 19](https://react.dev/) | UI framework |
-| [Vite 8](https://vitejs.dev/) | Build tool and development server |
-| [React Router DOM 7](https://reactrouter.com/) | Client-side routing |
-| [Tailwind CSS 3](https://tailwindcss.com/) | Utility-first CSS framework |
-| [Zustand](https://github.com/pmndrs/zustand) | Lightweight state management (with `persist` middleware) |
-| [Axios](https://axios-http.com/) | HTTP client with JWT interceptor |
-| [Socket.IO Client](https://socket.io/) | Real-time WebSocket communication |
-| [KaTeX](https://katex.org/) | LaTeX math typesetting |
-| [ReactMarkdown](https://remarkjs.github.io/react-markdown/) | Markdown rendering with `remark-math`, `rehype-katex`, `remark-gfm` |
-| [TipTap](https://tiptap.dev/) | Rich text editor (subjective answers) with custom math node |
-| [MathLive](https://cortexjs.io/mathlive/) | WYSIWYG equation editor (MathInputPopover) |
-| [Monaco Editor](https://microsoft.github.io/monaco-editor/) | Code editor (coding problems) |
-| [Lucide React](https://lucide.dev/) | Icon library |
-| [TensorFlow.js](https://www.tensorflow.org/js) | Client-side ML for object detection (COCO-SSD) |
-| [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) | Face landmark detection (head pose estimation) |
-| [JSZip](https://stuk.github.io/jszip/) | ZIP file parsing (TeX import) |
-| [idb](https://github.com/jakearchibald/idb) | IndexedDB wrapper |
+|---|---|
+| React 19 | UI framework |
+| Vite 8 | Build tool and dev server |
+| React Router DOM 7 | Client-side routing |
+| Tailwind CSS 3 | Utility-first styling |
+| Zustand | State management (auth store, in-memory JWT) |
+| Axios | HTTP client with JWT interceptor |
+| Socket.IO Client | Real-time events (exam room, time sync) |
+| KaTeX + rehype-katex | LaTeX math typesetting |
+| ReactMarkdown (remark-gfm, remark-math) | Question/answer markdown rendering |
+| TipTap | Rich-text subjective answer editor with custom math node |
+| MathLive | WYSIWYG equation editor (MathInputPopover) |
+| Monaco Editor | Code editor for coding problems |
+| TensorFlow.js + COCO-SSD, MediaPipe tasks-vision | Client-side proctoring models |
+| JSZip | LaTeX/ZIP question-bank import |
+| idb | IndexedDB draft caching |
+| Lucide React | Icons |
 
 ### Backend
 
 | Technology | Purpose |
-|------------|---------|
-| [FastAPI](https://fastapi.tiangolo.com/) | ASGI web framework |
-| [Uvicorn](https://www.uvicorn.org/) | ASGI server |
-| [SQLAlchemy](https://www.sqlalchemy.org/) | ORM (declarative base, session management) |
-| [psycopg2-binary](https://www.psycopg.org/) | PostgreSQL adapter |
-| [PyJWT](https://pyjwt.readthedocs.io/) | JSON Web Token creation and verification (HS256) |
-| [bcrypt](https://github.com/pyca/bcrypt/) | Password hashing with dummy-hash timing protection |
-| [Pydantic](https://docs.pydantic.dev/) | Data validation and settings management |
-| [python-socketio](https://python-socketio.readthedocs.io/) | WebSocket server for real-time features |
-| [SlowAPI](https://slowapi.readthedocs.io/) | Rate limiting (in-memory, per-route) |
-| [cryptography (Fernet)](https://cryptography.io/) | Exam password encryption at rest |
-| [pytest](https://docs.pytest.org/) | Testing framework |
-| [httpx](https://www.python-httpx.org/) | Async HTTP test client (FastAPI TestClient) |
-| [aiohttp](https://docs.aiohttp.org/) | Async HTTP (used by Socket.IO transport) |
+|---|---|
+| Python 3.11 | Runtime (verified against the local environment used for the test suite) |
+| FastAPI | ASGI web framework |
+| Uvicorn | ASGI server |
+| PyJWT | JWT creation/verification (HS256) |
+| bcrypt | Password hashing (staff, tokens) |
+| Pydantic | Payload validation |
+| python-socketio / python-engineio | Socket.IO server (ASGI mode) |
+| SlowAPI | Rate limiting |
+| cryptography (Fernet) | Exam password encryption at rest |
+| PyMongo | MongoDB driver (repository layer) |
+| pytest / httpx / pytest-asyncio / pytest-cov | Testing |
+| aiohttp | Async HTTP transport (Socket.IO) |
 
 ### Database
 
 | Technology | Purpose |
-|------------|---------|
-| [PostgreSQL](https://www.postgresql.org/) | Primary database (production on Neon.tech) |
-| [SQLite](https://www.sqlite.org/) | Test database (in-memory, ephemeral) |
+|---|---|
+| MongoDB (Atlas) | Authoritative runtime datastore — 12 collections |
+| PyMongo | Driver; repository layer is a thin CRUD wrapper (no ODM) |
+| Indexes | Unique + lookup indexes created idempotently at startup (`mongo_indexes.py`) |
+| Transactions | Multi-collection writes (exam creation/update) run in replica-set transactions |
 
-### Deployment
+### Testing
 
-| Platform | Service |
-|----------|---------|
-| [Render](https://render.com/) | Backend API and static frontend hosting |
-
----
-
-## Repository Structure
-
-<details>
-<summary>Click to expand full directory tree</summary>
-
-```
-LIAS/
-├── backend/                          # FastAPI Python backend
-│   ├── app/
-│   │   ├── main.py                   # App entry, lifespan, CORS, Socket.IO
-│   │   ├── auth.py                   # JWT creation/verification, session guard
-│   │   ├── database.py               # SQLAlchemy engine and session factory
-│   │   ├── limiter.py                # SlowAPI rate limiter instance
-│   │   ├── models.py                 # All SQLAlchemy ORM models
-│   │   └── routes/
-│   │       ├── auth.py               # /auth/* endpoints
-│   │       ├── exam.py               # /exam/* endpoints
-│   │       ├── admin.py              # /admin/* endpoints
-│   │       └── evaluate.py           # /admin/exams/*/evaluate/* endpoints
-│   ├── tests/
-│   │   ├── conftest.py               # Test fixtures (DB, client, samples)
-│   │   ├── test_models.py            # Model CRUD tests
-│   │   ├── test_auth.py              # Auth flow + rate limiting tests
-│   │   ├── test_admin.py             # Admin endpoint tests
-│   │   └── test_evaluate.py          # Evaluation endpoint tests
-│   ├── pyproject.toml                # Pytest + coverage configuration
-│   ├── requirements.txt              # Python dependencies
-│   └── .env.example                  # Environment variable template
-│
-├── frontend/                         # React SPA frontend
-│   ├── public/
-│   │   ├── Main-Logo.png             # Application logo
-│   │   ├── favicon.svg               # Browser favicon
-│   │   └── icons.svg                 # SVG icon sprite
-│   ├── src/
-│   │   ├── main.jsx                  # React entry point
-│   │   ├── App.jsx                   # Router + route guards
-│   │   ├── index.css                 # Tailwind imports
-│   │   ├── assets/
-│   │   │   ├── Main-Logo.png
-│   │   │   └── hero.png
-│   │   ├── components/
-│   │   │   ├── admin/                # Admin-facing components
-│   │   │   │   ├── AdminNav.jsx
-│   │   │   │   ├── CodingEvaluator.jsx
-│   │   │   │   ├── SubjectiveEvaluator.jsx
-│   │   │   │   └── TexZipImporter.jsx
-│   │   │   ├── exam/                 # Exam workspace components
-│   │   │   │   ├── AnswerRenderer.jsx
-│   │   │   │   ├── MathInputPopover.jsx
-│   │   │   │   ├── QuestionRenderer.jsx
-│   │   │   │   └── SubjectiveEditor.jsx
-│   │   │   └── ui/
-│   │   │       └── LiveCountdown.jsx
-│   │   ├── extensions/               # TipTap custom extensions
-│   │   │   ├── MathNode.js
-│   │   │   └── MathNodeView.jsx
-│   │   ├── hooks/
-│   │   │   ├── useAdminApi.js        # Admin API client with cache
-│   │   │   ├── useEvaluateApi.js     # Evaluation API wrapper
-│   │   │   └── useTrueTime.js        # Server-synced clock
-│   │   ├── pages/
-│   │   │   ├── StudentAuth.jsx       # Student login
-│   │   │   ├── PreExamCheck.jsx      # System readiness check
-│   │   │   ├── StudentDashboard.jsx  # Student exam list
-│   │   │   ├── ExamWorkspace.jsx     # Active exam workspace
-│   │   │   └── admin/
-│   │   │       ├── AdminDashboard.jsx
-│   │   │       └── views/
-│   │   │           ├── AdminMainView.jsx
-│   │   │           ├── ScheduleTest.jsx
-│   │   │           ├── CodingProblemBuilder.jsx
-│   │   │           ├── LiveTestMonitor.jsx
-│   │   │           ├── UpcomingTestPreview.jsx
-│   │   │           ├── AnalyticsView.jsx
-│   │   │           └── StudentDirectory.jsx
-│   │   ├── proctoring/
-│   │   │   ├── engine.js             # AI proctoring engine (singleton)
-│   │   │   ├── readiness.js          # Proctoring readiness gate
-│   │   │   └── useProctoring.js      # React hook for engine lifecycle
-│   │   ├── services/
-│   │   │   └── api.js                # Axios instance with interceptors
-│   │   ├── store/
-│   │   │   └── authStore.js          # Zustand auth store (in-memory JWT)
-│   │   └── utils/
-│   │       └── normalizeMath.js      # LaTeX normalization
-│   ├── index.html                    # HTML entry point
-│   ├── vite.config.js                # Vite configuration
-│   ├── tailwind.config.js            # Tailwind design system
-│   ├── postcss.config.js             # PostCSS configuration
-│   ├── eslint.config.js              # ESLint flat config
-│   └── package.json                  # Node dependencies and scripts
-│
-├── .gitignore                        # Git ignore rules
-└── README.md                         # This file
-```
-</details>
-
-### Key directories explained
-
-| Directory | Purpose |
-|-----------|---------|
-| `backend/app/` | FastAPI application — routes, models, authentication, database setup |
-| `backend/app/routes/` | API route handlers organized by domain (auth, exam, admin, evaluate) |
-| `backend/tests/` | Pytest test suite with fixtures and coverage configuration |
-| `frontend/src/pages/` | Top-level page components and route views |
-| `frontend/src/pages/admin/views/` | Admin dashboard sub-views (exam management, monitor, analytics, etc.) |
-| `frontend/src/components/admin/` | Reusable admin components (grading UI, ZIP importer) |
-| `frontend/src/components/exam/` | Reusable exam components (rendering, editors) |
-| `frontend/src/proctoring/` | Client-side AI proctoring engine (TensorFlow.js + MediaPipe) |
-| `frontend/src/hooks/` | Custom React hooks (API clients, clock sync) |
-| `frontend/src/store/` | Zustand state management |
-| `frontend/src/extensions/` | TipTap editor custom extensions |
+- **Backend**: pytest (150 tests) against a dedicated `lias_test` Mongo DB.
+- **Frontend**: no automated test framework; validation is `npm run build`
+  (production build) and `npm run lint`.
 
 ---
 
-## Installation
+## 12. Environment Variables
+
+> Never commit real `.env` files. Copy `.env.example` and fill in your values.
+> See `backend/.env.example` and `frontend/.env.example`.
+
+### Backend (`backend/.env`)
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `JWT_SECRET_KEY` | **Yes** | HS256 signing key for all JWTs. App fails fast at import if missing. |
+| `MONGO_URI` | **Yes** | MongoDB connection string (e.g. Atlas). Append `?retryWrites=true&w=majority` for production. Used by `database.py`. |
+| `MONGO_DB_NAME` | No | Database name (default `lias`). |
+| `ADMIN_SECRET` | Conditional | Legacy `X-Admin-Token` bootstrap secret, accepted **only while zero admin accounts exist** (pre-seed window). |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Conditional | Bootstraps the first `role=admin` account at startup when zero admins exist (`_seed_admin_if_needed`). |
+| `DB_ENCRYPTION_KEY` | **Yes** | Fernet key for encrypting exam start/end passwords at rest. App fails fast at import if missing. |
+| `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (default `http://localhost:5173`). Used by CORS middleware and Socket.IO. |
+| `JWT_EXPIRY_SECONDS` | No | Session JWT lifetime (default `7200`). |
+| `FRONTEND_BASE_URL` | No | Reserved for frontend URL configuration (not consumed by current route code). |
+
+### Frontend (`frontend/.env`)
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `VITE_API_URL` | **Yes** | Backend base URL (e.g. `http://localhost:8000`). The app throws at startup if unset. |
+
+---
+
+## 13. Local Setup
 
 ### Prerequisites
 
-- [Python](https://www.python.org/) 3.12 or later
-- [Node.js](https://nodejs.org/) 20 or later
-- [PostgreSQL](https://www.postgresql.org/) (production) — or use SQLite for local development
+- Python 3.11+ (the suite is verified on Python 3.11.5)
+- Node.js 20+ and npm
+- A MongoDB instance (local MongoDB, Docker, or Atlas free tier) — the app
+  and tests require it; there is no embedded fallback database
 
-### Clone the repository
-
-```bash
-git clone https://github.com/Ganesh-AIML/LIAS.git
-cd LIAS
-```
-
-### Backend setup
+### Backend Setup
 
 ```bash
 cd backend
 
-# Create and activate virtual environment
+# Create and activate a virtual environment
 python -m venv venv
 # Windows: venv\Scripts\activate
 # macOS/Linux: source venv/bin/activate
@@ -413,567 +602,261 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your configuration (see Configuration section)
+# Edit .env: set JWT_SECRET_KEY, MONGO_URI, DB_ENCRYPTION_KEY (and optionally
+# ADMIN_EMAIL/ADMIN_PASSWORD/ADMIN_SECRET for first-admin bootstrap)
 ```
 
-### Frontend setup
+Generate a Fernet-compatible `DB_ENCRYPTION_KEY`:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+### Frontend Setup
 
 ```bash
 cd frontend
 
-# Install dependencies
 npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your backend URL
+# Edit .env: VITE_API_URL=http://localhost:8000
 ```
 
-### Database setup
+---
 
-The application runs **additive migrations** automatically on startup via the lifespan handler in `main.py`. Tables are created if they don't exist, and missing columns are added for existing tables.
+## 14. Running the System
 
-For local development, you can use either:
+Start the **backend** (from `backend/`):
 
-**Option 1: PostgreSQL**
 ```bash
-# Ensure DATABASE_URL in backend/.env points to your local or cloud PostgreSQL instance
-# Example: postgresql://user:password@localhost:5432/lias
-```
-
-**Option 2: SQLite** (no external database required)
-```bash
-# Set DATABASE_URL in backend/.env to:
-# sqlite:///./test.db
-```
-
-### Run development servers
-
-**Terminal 1 — Backend:**
-```bash
-cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
-**Terminal 2 — Frontend:**
+On startup the app:
+
+1. connects to MongoDB (`MONGO_URI`),
+2. idempotently creates the Mongo indexes (`ensure_mongo_indexes`),
+3. seeds the first admin account if `ADMIN_EMAIL`/`ADMIN_PASSWORD` are set
+   and no admin exists yet.
+
+Start the **frontend** (from `frontend/`):
+
 ```bash
-cd frontend
 npm run dev
 ```
 
-The frontend dev server will be available at `http://localhost:5173` and the API at `http://localhost:8000`.
+Expected local URLs (dev mode):
 
-### Production build
+- Frontend: `http://localhost:5173` (admin dashboard is the root route)
+- Backend API: `http://localhost:8000` (health check at `/auth/health-check`)
+
+No other external services are required at runtime beyond MongoDB.
+
+---
+
+## 15. Production Build
+
+### Frontend
 
 ```bash
 cd frontend
 npm run build
-# Output in frontend/dist/ — serve via any static file server
+# Output in frontend/dist/ — serve via any static file server (Render static site, etc.)
 ```
+
+Build-time environment: `VITE_API_URL` must point at the production backend.
+
+### Backend
+
+No build step — run with Uvicorn:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Deployment is handled via Render (backend web service + static frontend). The
+required production environment variables are the same as §12, most
+importantly `JWT_SECRET_KEY`, `MONGO_URI`, and `DB_ENCRYPTION_KEY`, plus
+`ALLOWED_ORIGINS` set to the production frontend origin and the admin
+bootstrap variables for the first deploy.
+
+### Operational scripts (optional)
+
+- `backend/scripts/verify_indexes.py` — verifies the live Mongo collections
+  have the expected indexes.
+- `backend/scripts/probe_databases.py` — diagnostic probe of the target Mongo
+  database (optionally compares against a Neon URL if `DATABASE_URL` is
+  supplied). These are ops-only tools, not part of the runtime.
 
 ---
 
-## Configuration
+## 16. Testing
 
-### Backend environment variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | — | PostgreSQL or SQLite connection string |
-| `JWT_SECRET_KEY` | Yes | — | Secret key for HS256 JWT signing |
-| `ADMIN_SECRET` | Yes | — | Static admin authentication token |
-| `DB_ENCRYPTION_KEY` | Yes | — | Fernet-compatible 32-byte base64 key for exam password encryption |
-| `ALLOWED_ORIGINS` | No | `http://localhost:5173` | Comma-separated CORS allowed origins |
-| `JWT_EXPIRY_SECONDS` | No | `7200` | JWT token lifetime in seconds |
-| `FRONTEND_BASE_URL` | No | `http://localhost:5173` | Frontend URL for redirects |
-
-<details>
-<summary>Backend .env.example</summary>
-
-```env
-DATABASE_URL=postgresql://user:password@localhost:5432/lias
-JWT_SECRET_KEY=your-secret-key-here
-ADMIN_SECRET=your-admin-secret
-DB_ENCRYPTION_KEY=your-fernet-encoded-key
-ALLOWED_ORIGINS=http://localhost:5173
-JWT_EXPIRY_SECONDS=7200
-FRONTEND_BASE_URL=http://localhost:5173
-```
-</details>
-
-### Frontend environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VITE_API_URL` | Yes | Backend API base URL (e.g., `http://localhost:8000`) |
-
-<details>
-<summary>Frontend .env.example</summary>
-
-```env
-VITE_API_URL=http://localhost:8000
-```
-</details>
-
-> **Security note:** Never commit `.env` files containing actual secrets to version control. Use `.env.example` templates instead.
-
----
-
-## Usage
-
-### Admin workflows
-
-#### Creating an exam
-
-1. Navigate to the admin dashboard (`/`).
-2. Click **Schedule New Exam** to open the multi-step creation wizard.
-3. Configure:
-   - Exam title, duration, start time, and password.
-   - **MCQ sections** — add questions with four options and an answer key.
-   - **Coding problems** — add problem descriptions, constraints, and test cases.
-   - **Subjective questions** — add open-ended questions with markdown content.
-4. Publish the exam — it becomes visible to assigned students at the scheduled time.
-
-#### Assigning students
-
-1. Use the **Student Directory** to manage the master student list.
-2. From the exam management view, **assign** students to the exam.
-3. Each student receives a unique exam token (`LIAS_<STUDENT>_<HEX>`) and temporary password.
-
-#### Monitoring a live exam
-
-1. Navigate to **Live Test Monitor** from the admin dashboard.
-2. View active sessions with real-time violation counts.
-3. Click a student to see detailed violation history.
-4. Use **Kick Out** to revoke a session or **Grant Access** to unlock a student.
-
-#### Evaluating submissions
-
-1. Open **Analytics** for the completed exam.
-2. Review auto-calculated MCQ scores.
-3. Switch to **Coding** or **Subjective** tabs to manually enter marks.
-4. Mark each submission as **Reviewed** when evaluation is complete.
-5. The **Leaderboard** tab shows aggregated scores (MCQ + Coding + Subjective).
-
-#### Importing questions from LaTeX/ZIP
-
-1. From the exam creation wizard, choose **Import from ZIP**.
-2. Upload a `.zip` file containing `questions.tex` and optional images.
-3. Preview the parsed questions and confirm import.
-4. See [Question Import](#question-import) for format specification.
-
-### Student workflows
-
-#### Joining an exam
-
-1. Navigate to `/join` and enter the exam token and password provided by the admin.
-2. On successful authentication, a JWT session is created.
-
-#### Pre-exam check
-
-1. After joining, the **Pre-Exam Check** screen validates system readiness:
-   - **Camera** — access and frame capture verified.
-   - **Microphone** — audio input confirmed.
-   - **Network** — connection speed measured.
-   - **Fullscreen** — ability to enter fullscreen mode.
-   - Browser compatibility and proctoring ML model loading.
-
-#### Taking an exam
-
-1. The **Exam Workspace** loads with the configured question sections.
-2. A countdown timer (synced to server time) displays remaining time.
-3. The proctoring engine runs continuously in the background.
-4. **Fullscreen is enforced** — exiting triggers a warning (3 violations = session revoked).
-5. Navigate through MCQ options, code in the built-in editor, and write subjective answers.
-6. Submit when finished or when time expires.
-
-#### After submission
-
-- MCQ scores are calculated immediately.
-- Coding and subjective answers are queued for manual evaluation by the admin.
-- Results become available in the student dashboard once evaluation is complete.
-
----
-
-## Question Import
-
-LIAS supports bulk question import via a `.zip` archive containing a `questions.tex` file. This is the primary import path for question banks.
-
-### ZIP structure
-
-```
-exam.zip
-├── questions.tex        # Exactly one .tex file (anywhere in the zip)
-└── images/              # Optional — referenced via \includegraphics
-    ├── diagram1.png
-    └── figure2.jpg
-```
-
-### questions.tex format
-
-The file is organized into **sections**, each opened by a `\metasection` command:
-
-```
-\metasection{Section Name}{question_type}{marks_per_question}
-```
-
-| Argument | Values | Description |
-|----------|--------|-------------|
-| Section Name | Any string | Display label for the section |
-| question_type | `mcq`, `subjective`, `coding` | Determines how questions are parsed |
-| marks_per_question | Positive integer | Maximum marks per question |
-
-#### MCQ questions
-
-```latex
-\metasection{Quantitative Aptitude}{mcq}{4}
-
-\begin{question}
-What is 2 + 2?
-\answer{A}
-\begin{choices}
-\choice A: 4
-\choice B: 5
-\choice C: 6
-\choice D: 7
-\end{choices}
-\end{question}
-```
-
-#### Subjective questions
-
-```latex
-\metasection{Long Answer}{subjective}{10}
-
-\begin{question}
-Explain the concept of present value in actuarial science.
-Provide a detailed explanation with examples.
-\end{question}
-```
-
-#### Coding questions
-
-```latex
-\metasection{Algorithms}{coding}{25}
-
-\begin{codingquestion}
-Two Sum Problem
-
-Given an array of integers nums and an integer target...
-\begin{constraints}
-- 2 <= nums.length <= 10^4
-- -10^9 <= nums[i] <= 10^9
-\end{constraints}
-\testcase{[2,7,11,15], 9}
-\testcase{[3,2,4], 6}
-\testcase{[3,3], 6}
-\end{codingquestion}
-```
-
-### Supported LaTeX features
-
-| Feature | Support |
-|---------|---------|
-| `\textbf`, `\textit`, `\emph`, `\underline` | Converted to markdown (`**`, `*`, `__`) |
-| `\boldsymbol` | Converted to bold (`**`) |
-| `\mathrm` | Content preserved, command stripped |
-| `\pounds` | Converted to `£` |
-| Math delimiters `$...$`, `$$...$$`, `\[...\]` | Normalized and rendered via KaTeX |
-| `\includegraphics` | Resolved from ZIP images folder |
-| `\begin{itemize}` / `\begin{enumerate}` | Converted to markdown lists |
-| `\begin{center}` | Content preserved, environment stripped |
-| `\begin{tabular}` | Converted to GFM pipe tables |
-| `\begin{tikzpicture}` | Replaced with diagram placeholder |
-| `\begin{cases}` | Rendered via KaTeX math mode |
-
-### Limitations (verified)
-
-- `\begin{tikzpicture}` diagrams are replaced with a placeholder text — actual rendering is not supported.
-- Code execution endpoint (`/exam/{exam_id}/run`) is a stub and returns "Code execution unavailable."
-- Image formats depend on browser support — standard web formats (PNG, JPG, GIF, SVG) are recommended.
-
----
-
-## API Overview
-
-The API is organized into three route groups. All endpoints are prefixed by the backend base URL.
-
-### Auth — `/auth`
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/auth/health-check` | Server health status and timestamp |
-| POST | `/auth/join` | Student login with exam token + password |
-| POST | `/auth/logout` | Revoke current session |
-| POST | `/auth/refresh-token` | Renew JWT for active session |
-| PUT | `/auth/update-password` | Change exam password |
-
-### Exam — `/exam`
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/exam/session-status` | Session validity check (lock screen polling) |
-| POST | `/exam/violation` | Log a proctoring violation event |
-| GET | `/exam/violation/count` | Get violation counts grouped by type |
-| GET | `/exam/student/available-tests` | Student dashboard — upcoming/live/past exams |
-| GET | `/exam/{exam_id}` | Load exam workspace content |
-| POST | `/exam/{exam_id}/verify-password` | Verify start or end password |
-| POST | `/exam/{exam_id}/submit` | Submit exam answers |
-| POST | `/exam/{exam_id}/run` | Code execution (stub — currently unavailable) |
-| POST | `/exam/{exam_id}/submit-code` | Code submission (pending evaluation) |
-
-### Admin — `/admin`
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/admin/verify` | Verify admin authentication token |
-| GET | `/admin/exams` | List all exams with session stats |
-| POST | `/admin/exams` | Create a new exam with full content |
-| GET | `/admin/exams/active` | List upcoming and live exams |
-| GET | `/admin/exams/{exam_id}` | Get full exam details |
-| PUT | `/admin/exams/{exam_id}` | Update exam (purge + replace content) |
-| DELETE | `/admin/exams/{exam_id}` | Delete exam with cascade |
-| GET | `/admin/exams/{exam_id}/analytics` | Exam analytics and grading data |
-| GET | `/admin/exams/{exam_id}/monitor` | Live proctoring monitor data |
-| POST | `/admin/exams/{exam_id}/assign` | Bulk-assign students to exam |
-| GET | `/admin/students` | List registered students |
-| POST | `/admin/students` | Bulk create or update students |
-| POST | `/admin/students/bulk-delete` | Bulk delete students |
-| PUT | `/admin/students/{token}` | Update student |
-| DELETE | `/admin/students/{token}` | Delete student |
-| POST | `/admin/sessions/revoke` | Revoke and submit a student session (kick-out) |
-| POST | `/admin/sessions/grant` | Unlock a student session |
-| GET | `/admin/master-students` | List master directory entries |
-| POST | `/admin/master-students` | Create a master student |
-| POST | `/admin/master-students/bulk` | Bulk upsert master students |
-| PUT | `/admin/master-students/{student_id}` | Update master student |
-| POST | `/admin/master-students/{student_id}/reset-and-resync` | Reset password and resync tokens |
-| DELETE | `/admin/master-students/{student_id}` | Delete master student |
-| GET | `/admin/exams/{exam_id}/evaluate` | List students pending evaluation |
-| GET | `/admin/exams/{exam_id}/evaluate/{session_id}` | Full evaluation detail |
-| POST | `/admin/exams/{exam_id}/evaluate/{session_id}` | Save evaluation marks |
-| POST | `/admin/exams/{exam_id}/evaluate/{session_id}/clear` | Clear evaluation data |
-| POST | `/admin/exams/{exam_id}/evaluate/{session_id}/review` | Toggle review status |
-
-### Authentication
-
-- **Student endpoints**: Require `Authorization: Bearer <session_jwt>` header.
-- **Admin endpoints**: Require `X-Admin-Token: <admin_secret>` header.
-
----
-
-## Database
-
-### Entity relationship diagram
-
-```mermaid
-erDiagram
-    Student ||--o{ ExamSession : "attempts"
-    Exam ||--o{ ExamSession : "contains"
-    Exam ||--o{ Question : "has"
-    Exam ||--o{ CodingProblem : "has"
-    Exam ||--o{ SubjectiveQuestion : "has"
-    Exam ||--o{ Section : "organized by"
-    Exam ||--o{ ViolationLog : "logs"
-    ExamSession ||--o{ ViolationLog : "generates"
-    CodingProblem ||--o{ TestCase : "validated by"
-    Section ||--o{ Question : "groups"
-    Section ||--o{ SubjectiveQuestion : "groups"
-    TokenRegistry }o--|| Exam : "belongs to"
-    TokenRegistry }o--|| Student : "belongs to"
-    MasterStudent ||--o{ TokenRegistry : "generates"
-```
-
-### Key entities
-
-| Entity | Table | Description |
-|--------|-------|-------------|
-| **Student** | `students` | Registered student accounts with bcrypt-hashed passwords |
-| **MasterStudent** | `master_students` | Master directory — centralized student records |
-| **Exam** | `exams` | Assessment configuration — timing, passwords, status, content structure |
-| **ExamSession** | `exam_sessions` | Individual student exam attempt — tracks submission, scores, evaluation |
-| **Question** | `questions` | MCQ questions with four options and correct answer |
-| **CodingProblem** | `coding_problems` | Coding challenge with description, constraints, and language configuration |
-| **TestCase** | `test_cases` | Input/output pairs for coding problem validation |
-| **SubjectiveQuestion** | `subjective_questions` | Open-ended questions with markdown content and marks |
-| **Section** | `sections` | Logical grouping of questions (MCQ or subjective) within an exam |
-| **ViolationLog** | `violation_logs` | Proctoring violation events linked to sessions |
-| **TokenRegistry** | `token_registry` | Exam-specific tokens linking students to exams with encrypted passwords |
-
----
-
-## Security
-
-### Authentication
-
-- **Student**: Two-factor authentication — unique exam token + bcrypt-hashed password. Sessions are managed via HS256 JWT with configurable expiry (default 2 hours). JWTs are held in memory only (never persisted to `sessionStorage`/`localStorage`).
-- **Admin**: Static secret token verified via constant-time comparison (`secrets.compare_digest`).
-- **Rate limiting**: Sensitive endpoints are rate-limited (5 requests/minute on `/auth/join`, 10/min on refresh/update/admin mutations).
-
-### Input validation
-
-- All request payloads validated through **Pydantic models** with `@field_validator` decorators.
-- Student IDs restricted to alphanumeric characters, underscores, hyphens, and dots (rejects HTML/script injection).
-- Password length enforced (6–256 characters).
-- Content format restricted to `plain` or `markdown`.
-- Subjective answers scanned for HTML tags (`<[a-zA-Z]` patterns are rejected).
-
-### Exam security
-
-- **Start/end passwords**: Encrypted at rest via Fernet symmetric encryption.
-- **Session ownership**: Cross-exam access prevented — JWT contains `exam_id` and is validated per request.
-- **Grace period**: Submissions rejected after a configured grace period post-exam-end.
-- **Duplicate prevention**: Re-submission and duplicate login (revokes old session) are enforced server-side.
-- **Content locking**: Exam content cannot be modified after the scheduled start time.
-
-### Proctoring
-
-- All ML models run **client-side** — no video stream is sent to the server.
-- Violations are logged as structured events (type, detail, timestamp).
-- Configurable violation limit (default: 3) — reaching the limit blocks further exam access in the UI.
-- Self-healing ML pipeline falls back from WebGL GPU to CPU on failure.
-
-### Data sanitization
-
-- Student-facing rendered content uses **ReactMarkdown** with `allowedElements` whitelist — `<script>`, `<style>`, `<iframe>`, and other dangerous tags are blocked.
-- URL sanitization restricts protocols to `https:`, `http:`, `mailto:`, and `tel:`.
-- Base64 images restricted to recognized image MIME types.
-
-### CORS
-
-- Configurable via `ALLOWED_ORIGINS` environment variable (comma-separated).
-- Methods: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`.
-- Headers: `Content-Type`, `Authorization`, `X-Admin-Token`.
-
----
-
-## Screenshots
-
-<p align="center">
-  <img src="frontend/src/assets/hero.png" alt="LIAS Hero" width="600"/>
-  <br/>
-  <em>Application hero image</em>
-</p>
-
-Additional screenshot placeholders (suggested locations for documentation images):
-
-| Screenshot | Suggested Path | Description |
-|-----------|----------------|-------------|
-| Dashboard | `docs/images/dashboard.png` | Student dashboard with upcoming/live/past exams |
-| Exam Workspace | `docs/images/exam-workspace.png` | Active exam with MCQ, coding editor, and subjective editor |
-| Admin Monitor | `docs/images/admin-monitor.png` | Live proctoring monitor with violation breakdown |
-| Analytics | `docs/images/analytics.png` | Exam analytics dashboard with scores and leaderboard |
-| Import Preview | `docs/images/import-preview.png` | LaTeX/ZIP import preview before confirmation |
-
----
-
-## Testing
-
-### Backend tests
-
-The backend uses **pytest** with 29 tests across 5 test files:
+### Backend
 
 ```bash
 cd backend
-pytest -v
+python -m pytest tests/ -x --tb=short -q
 ```
 
-| Test file | Coverage | Focus |
-|-----------|----------|-------|
-| `tests/test_models.py` | Model CRUD, cascade deletes | Student and Exam ORM operations |
-| `tests/test_auth.py` | Authentication flow, rate limiting, session revocation | Join, logout, refresh, update-password |
-| `tests/test_admin.py` | Admin verification, exam CRUD validation | Auth guard, payload validation |
-| `tests/test_evaluate.py` | Evaluation endpoints | List, detail, save, clear, review |
+The suite targets a dedicated **`lias_test`** Mongo database (set in
+`tests/conftest.py`); each test starts from an empty database and the
+collections are wiped after every test. The production database is never
+touched by tests.
 
-Test infrastructure uses:
-- **SQLite in-memory database** (ephemeral per test run)
-- **httpx TestClient** for async HTTP requests
-- **pytest-asyncio** for async test support
-- **pytest-cov** for coverage measurement
+**Latest verified result: 150 passed** (pytest, Python 3.11.5, ~5 min run).
 
-### Frontend tests
+Test files:
 
-There are currently **no automated frontend tests** in the repository.
+| File | Focus |
+|---|---|
+| `test_auth.py` | Join, logout, refresh, update-password, revocation, rate limits |
+| `test_admin.py` | Admin guards, exam creation/update/delete validation |
+| `test_staff_auth.py` | Admin/faculty login, faculty registration, module assignment, admin seed |
+| `test_module_scope.py` | Module-based authorization matrix (admin vs faculty vs pending) |
+| `test_evaluate.py` | Evaluation list/detail/save/clear/review |
+| `test_faculty_eval_ownership.py` | Faculty ownership, admin context switching, legacy fallback |
+| `test_expired_finalize.py` | Expired-session finalization |
+| `test_failure_recovery.py` | Idempotent submit/revoke, concurrent revocation, JWT expiry/tamper, partial bulk failures |
+| `test_mongo_parity.py` | Repository schema/`doc_for` parity invariants |
 
----
+### Frontend
 
-## Known Limitations
+No automated frontend test framework is present. Validation commands:
 
-The following limitations have been verified from the codebase:
-
-1. **Code execution is a stub** — The `/exam/{exam_id}/run` endpoint returns `{"detail": "Code execution unavailable. Feature pending."}`. Coding problem evaluation is performed manually by administrators.
-
-2. **No automated frontend tests** — The frontend codebase does not include unit or integration tests.
-
-3. **No Docker/CI pipeline** — The repository does not contain Dockerfiles, `docker-compose.yml`, or GitHub Actions workflow files. Deployment is managed directly through Render's platform.
-
-4. **No dark mode** — The UI uses a light color scheme only (configured in `tailwind.config.js`).
-
-5. **TikZ picture rendering** — `\begin{tikzpicture}` blocks in LaTeX question imports are replaced with a `*[Diagram: see printed question paper]*` placeholder.
-
-6. **No license specified** — The repository does not include a `LICENSE` file.
-
-> **Note:** These limitations are based on the current state of the repository and may change as the project evolves.
+```bash
+cd frontend
+npm run build    # production build (latest verified: succeeds)
+npm run lint     # ESLint flat config
+```
 
 ---
 
-## Roadmap
+## 17. Database Architecture
 
-The following improvements are evident from the codebase as planned or partially implemented:
+MongoDB is the **only** runtime datastore. The historical PostgreSQL (Neon)
+datastore has been fully removed from the application code and dependencies;
+any remaining migration/cutover work is operational (deployment) work, not
+implemented in this codebase.
 
-- [ ] **Code execution integration** — The `/exam/{id}/run` endpoint exists as a stub, suggesting plans for server-side code compilation and execution.
-- [ ] **Automated coding evaluation** — The evaluation data model supports `coding_evaluation` storage, indicating future automated grading capabilities.
-- [ ] **Expanded proctoring models** — The engine architecture supports adding new detection models beyond the current COCO-SSD + MediaPipe setup.
-- [ ] **Dark mode support** — Design system tokens are centralized in `tailwind.config.js`, making theme extension straightforward.
+### Collections (one per logical entity)
 
-> **Note:** This roadmap reflects features that are either partially implemented (stubs, data model fields) or naturally suggested by the architecture. No formal roadmap document exists in the repository.
+| Collection | Purpose |
+|---|---|
+| `students` | Student accounts with bcrypt-hashed passwords and active flag |
+| `token_registry` | Per-exam tokens linking students to exams, with hashed passwords |
+| `staff_accounts` | Admin and faculty accounts (role, module, password hash) |
+| `exams` | Exam configuration (timing, passwords, status, module) |
+| `exam_sessions` | Per-student exam attempts (submission payloads, scores, evaluation, revocation) |
+| `faculty_evaluations` | Faculty-owned coding/subjective marks per session |
+| `violation_logs` | Proctoring violation events |
+| `questions` | MCQ questions (options, answer key, section, marks) |
+| `coding_problems` | Coding problems (description, constraints, languages, marks) |
+| `test_cases` | Coding problem input/output pairs |
+| `subjective_questions` | Subjective questions (marks, content format) |
+| `sections` | Question-grouping metadata (type, marks per question, order) |
+
+### Important indexes (`app/mongo_indexes.py`)
+
+- `token_registry`: unique `(student_id, exam_id)`, index on `exam_id`
+- `staff_accounts`: unique `email`
+- `faculty_evaluations`: unique `(session_id, faculty_id)`, indexes on
+  `faculty_id` and `session_id`
+- `exam_sessions`: composite `(student_id, exam_id, is_revoked)`, index on `exam_id`
+- `violation_logs`: indexes on `session_id`, `student_id`, `exam_id`
+- `questions`, `subjective_questions`, `coding_problems`: index on `exam_id`
+- `test_cases`: index on `problem_id`
+- `sections`: index on `exam_id`
+
+Indexes are created idempotently on every backend startup.
+
+### Repository abstraction
+
+All persistence flows through `app/repositories.py`:
+
+- `doc_for(table, row, ...)` — schema-driven document builder; every document
+  carries `_id` = logical id and a mirror `id` field, with JSON-in-text
+  fields (submission payloads, marks) stored as native BSON.
+- CRUD helpers (`find`, `find_all`, `insert_one`, `insert_many`, `update_one`,
+  `update_many`, `find_one_and_update`, `delete_*`, `count`, `aggregate`,
+  `distinct`) that accept logical table names.
+- `mongo_transaction()` — replica-set transactions used by exam
+  create/update (exam + sections + questions + coding problems + test cases +
+  subjective questions committed atomically) and by exam deletion (cascade of
+  sessions, violations, evaluations, and content).
+- Atomicity guarantees: re-login session replacement and exam submission use
+  `find_one_and_update` with state-matching filters (no TOCTOU double-submit);
+  bulk inserts run `ordered=False`.
 
 ---
 
-## Contributing
+## 18. Security
 
-Contributions are welcome. To contribute:
-
-1. **Fork** the repository.
-2. **Create a feature branch** (`git checkout -b feature/your-feature`).
-3. **Make your changes** following the existing code style:
-   - Backend: Python type hints, Pydantic validation, SQLAlchemy ORM patterns.
-   - Frontend: React functional components, Tailwind CSS, Zustand for state, Axios for HTTP.
-4. **Run tests** to ensure no regressions:
-   ```bash
-   cd backend && pytest
-   ```
-5. **Build the frontend** to verify no compilation errors:
-   ```bash
-   cd frontend && npm run build
-   ```
-6. **Commit your changes** with a descriptive message.
-7. **Push to your fork** and submit a pull request.
-
-### Pull request guidelines
-
-- Keep PRs focused on a single concern.
-- Include a clear description of the change and its motivation.
-- Reference any related issues.
-- Ensure all existing tests pass.
-- Add tests for new functionality where applicable.
-
-### Code style
-
-- **Python**: Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) with type hints.
-- **JavaScript/JSX**: The project uses ESLint flat config — run `npx eslint .` to check.
-- **CSS**: Use Tailwind utility classes; avoid custom CSS where possible.
+| Control | Implementation |
+|---|---|
+| JWT authentication | HS256, configurable expiry (`JWT_EXPIRY_SECONDS`); student tokens carry `sub`, `exam_id`, `session_id`; staff tokens carry `sub` only |
+| Session validation | `verify_session_guard` re-loads the session from Mongo per request; checks existence, revocation, and that `session.student_id == JWT sub` (IDOR protection) |
+| Role authorization | `verify_admin` re-reads the staff account per request; `require_admin` (platform admin) vs `require_exam_scope` (module-gated faculty) |
+| Module authorization | Canonical module registry (`module_codes.py`, MAS701–MAS709); faculty forced to their own module; unknown module codes rejected (422) |
+| Session revocation | Re-login atomically revokes the old session; admin revoke/grant; auto-revoke at 3 violations; revoked sessions return 401 `SESSION_REVOKED` |
+| Rate limiting | SlowAPI: 5/min `/auth/join`, 10/min staff login + admin mutations, 20/min `/admin/verify`, 30/min token refresh & evaluation writes |
+| CORS | `ALLOWED_ORIGINS` (comma-separated); methods GET/POST/PUT/DELETE/OPTIONS; headers Content-Type, Authorization, X-Admin-Token |
+| Password hashing | bcrypt (rounds 12) for token passwords and staff accounts; dummy-hash executed on join miss to prevent timing-based enumeration; admin seed via env vars only |
+| Exam passwords | bcrypt hash for verification + Fernet-encrypted copies for admin re-display (`DB_ENCRYPTION_KEY`) |
+| WebSocket authentication | `verify_socket_token` validates the session JWT and `exam_id` before a client joins an exam room |
+| Exam scope enforcement | Every exam-scoped student route checks `active_session.exam_id == exam_id`; workspace/password/submit all reject cross-exam access |
+| Submission integrity | Atomic single-submit (`find_one_and_update` on `is_submitted: false`); late submissions rejected past `end + 60s` grace; sessions created after exam end cannot submit |
+| Input validation | Pydantic validators: student ID charset, length caps, content-format allowlist (`plain`/`markdown`), HTML rejection in subjective answers, canonical module codes |
+| Legacy bootstrap window | `X-Admin-Token` (`ADMIN_SECRET`) accepted only while **zero** admin accounts exist, with constant-time comparison |
 
 ---
 
-## License
+## 19. Developer Handover Notes
 
-License information not found. The repository does not include a `LICENSE` file.
+**Where to start reading:**
 
----
+1. `backend/app/main.py` — app assembly: routers, CORS, rate limiter, startup
+   lifespan (indexes + admin seed), Socket.IO server.
+2. `backend/app/repositories.py` + `backend/app/database.py` — the data layer;
+   everything that touches MongoDB goes through here.
+3. `backend/app/auth.py` + `backend/app/routes/auth.py` — the two auth models
+   (student session JWTs vs staff JWTs) and the student join pipeline.
+4. `backend/app/routes/admin.py` — the largest surface: guards
+   (`verify_admin`/`require_admin`/`require_exam_scope`), exam CRUD, students,
+   monitor, analytics, staff management.
+5. `backend/app/routes/exam.py` — student-facing exam lifecycle.
+6. `backend/app/routes/evaluate.py` + `backend/app/evaluation_ctx.py` —
+   faculty-owned evaluation and context switching.
+7. `frontend/src/App.jsx` — route map and guards; then `pages/` per role and
+   `proctoring/` for the client-side engine.
 
-<div align="center">
-  <sub>Built with React, FastAPI, and TensorFlow.js</sub>
-  <br/>
-  <sub>LIAS — Learning Integrated Assessment System</sub>
-</div>
+**Where things live:**
+
+- **Repository / data access**: `backend/app/repositories.py` (schemas,
+  `doc_for`, transactions), `backend/app/mongo_indexes.py` (indexes),
+  `backend/app/database.py` (client/db singletons). Collections are addressed
+  by logical name via `repo.col("collection")` or the CRUD helpers.
+- **Authentication**: `backend/app/auth.py` (JWT guards), `routes/auth.py`
+  (student), `routes/staff_auth.py` (admin/faculty), `routes/admin.py`
+  (`verify_admin` guard + bootstrap window).
+- **Exam workflows**: `backend/app/routes/exam.py` (student side),
+  `backend/app/routes/admin.py` (management side).
+- **Evaluation**: `backend/app/routes/evaluate.py`, `backend/app/evaluation_ctx.py`.
+- **Proctoring**: `frontend/src/proctoring/` (engine, readiness, hook) +
+  violation endpoints in `backend/app/routes/exam.py`.
+- **Tests**: `backend/tests/` — fixtures in `conftest.py` (isolated
+  `lias_test` Mongo DB, staff/exam samples); run with
+  `python -m pytest tests/ -x --tb=short -q`.
+- **Env config**: `backend/.env.example`, `frontend/.env.example`.
+
+**Conventions to respect:**
+
+- Never bypass the repository layer with direct PyMongo calls in routes.
+- All documents must carry both `_id` and the mirrored `id` field (the
+  repository `doc_for()` enforces this).
+- Never trust a client-supplied `faculty_id` or `module` for faculty accounts;
+  identity and module always come from the server-side staff record.
+- Tests must never touch the production Mongo database (`lias_test` is
+  asserted in `conftest.py`).

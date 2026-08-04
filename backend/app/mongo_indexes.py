@@ -1,15 +1,13 @@
-"""MongoDB index definitions mirroring the relational constraints LIAS relied on.
+"""MongoDB index definitions for the LIAS runtime datastore.
 
-This is infrastructure only: it is not wired into the FastAPI lifespan yet.
-It will be invoked explicitly during the database-layer swap (G2+) so that the
-current Neon-backed application and the SQLite test suite never touch MongoDB.
-
-Every index below is justified by an existing route query; nothing is added
-blindly.
+Invoked idempotently on every startup (FastAPI lifespan, see app/main.py):
+create_index is a no-op when the index already exists, and unique
+constraints are enforced only on insert. Every index below is justified by an
+existing route query; nothing is added blindly.
 """
 
 # name -> (keys, kwargs). Recreates the unique constraints and lookup indexes
-# present in the PostgreSQL schema (see app/models.py).
+# required by the route queries.
 MONGO_INDEXES = {
     "token_registry": [
         ("uq_token_student_exam", [("student_id", 1), ("exam_id", 1)], True),

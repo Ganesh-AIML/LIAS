@@ -1,11 +1,9 @@
 """Thin PyMongo repository layer for the LIAS MongoDB target.
 
-One collection per logical entity (mirroring the PostgreSQL tables). This is
-NOT an ODM and does NOT emulate the SQLAlchemy query API -- it is a thin
-durable-CRUD wrapper.
+One collection per logical entity. This is NOT an ODM and does NOT emulate an
+ORM query API -- it is a thin durable-CRUD wrapper.
 
-ID strategy (parity with PostgreSQL):
-    * SQL primary key -> Mongo `_id`.
+ID strategy:
     * application-generated string IDs are preserved verbatim as `_id`.
     * violation_logs has an auto-increment INTEGER PK; its value is preserved
       as an int `_id`.
