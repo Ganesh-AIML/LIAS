@@ -21,9 +21,27 @@ from app.models import (
     CodingProblem,
     SubjectiveQuestion,
     StaffAccount,
-    FacultyEvaluation,
 )
+from app.database import get_mongo_db
 from app.auth import create_staff_jwt
+from app import repositories as repo
+
+
+def _mongo_mirror(orm_obj):
+    """Mirror any ORM object to its Mongo collection."""
+    coll = {
+        Exam: "exams", Question: "questions", CodingProblem: "coding_problems",
+        SubjectiveQuestion: "subjective_questions", ExamSession: "exam_sessions",
+        StaffAccount: "staff_accounts",
+    }.get(type(orm_obj))
+    if coll:
+        get_mongo_db()[coll].insert_one(dict(repo.doc_for(coll, orm_obj)))
+
+
+def _mongo_staff(row):
+    """Mirror a SQLAlchemy-created staff account into the Mongo test DB, so
+    the migrated verify_admin (which reads staff from Mongo) can resolve it."""
+    get_mongo_db()["staff_accounts"].insert_one(dict(repo.doc_for("staff_accounts", row)))
 
 
 def _exam(db, eid="exam_owner_001", module="MAS701"):
@@ -36,6 +54,7 @@ def _exam(db, eid="exam_owner_001", module="MAS701"):
     )
     db.add(exam)
     db.commit()
+    get_mongo_db()["exams"].insert_one(dict(repo.doc_for("exams", exam)))
     return exam
 
 
@@ -47,6 +66,7 @@ def _session(db, exam, sid="sess_owner_1", student_id="23-TEST-01"):
     )
     db.add(s)
     db.commit()
+    get_mongo_db()["exam_sessions"].insert_one(dict(repo.doc_for("exam_sessions", s)))
     return s
 
 
@@ -58,14 +78,15 @@ def _staff(db, sid, module="MAS701"):
     )
     db.add(row)
     db.commit()
+    _mongo_staff(row)
     return {"id": row.id, "headers": {"Authorization": f"Bearer {create_staff_jwt(row.id)}"}}
 
 
-def _eval_count(db, session_id, faculty_id):
-    return db.query(FacultyEvaluation).filter(
-        FacultyEvaluation.session_id == session_id,
-        FacultyEvaluation.faculty_id == faculty_id,
-    ).count()
+def _eval_count(_db, session_id, faculty_id):
+    return get_mongo_db()["faculty_evaluations"].count_documents({
+        "session_id": session_id,
+        "faculty_id": faculty_id,
+    })
 
 
 class TestFacultyOwnershipIsolation:
@@ -74,6 +95,7 @@ class TestFacultyOwnershipIsolation:
         cp = CodingProblem(id="cp_a1", exam_id=exam.id, title="P", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         s = _session(db, exam)
 
         save1 = client.post(
@@ -99,6 +121,7 @@ class TestFacultyOwnershipIsolation:
         cp = CodingProblem(id="cp_a2", exam_id=exam.id, title="P", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         s = _session(db, exam, sid="sess_owner2")
 
         f1 = _staff(db, "staff_fa")
@@ -128,6 +151,7 @@ class TestFacultyOwnershipIsolation:
         cp = CodingProblem(id="cp_b", exam_id=exam.id, title="P", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         s = _session(db, exam, sid="sess_owner3")
 
         f1 = _staff(db, "staff_fc")
@@ -173,6 +197,7 @@ class TestSubjectiveOwnership:
         sq = SubjectiveQuestion(id="sq_1", exam_id=exam.id, section="Theory", text="Q")
         db.add(sq)
         db.commit()
+        _mongo_mirror(sq)
         s = _session(db, exam, sid="sess_subj")
 
         f1 = _staff(db, "sf_sub1")
@@ -211,6 +236,7 @@ class TestPendingAndPartial:
         cp = CodingProblem(id="cp_p", exam_id=exam.id, title="P", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         s = _session(db, exam, sid="sess_part")
         client.post(
             f"/admin/exams/{exam.id}/evaluate/{s.id}",
@@ -230,6 +256,7 @@ class TestAdminVisibilityAndSwitching:
         cp = CodingProblem(id="cp_sw", exam_id=exam.id, title="P", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         s = _session(db, exam, sid="sess_sw")
         f_other = _staff(db, "sw_other")
 
@@ -239,22 +266,19 @@ class TestAdminVisibilityAndSwitching:
             json={"coding_marks": {"p": 1}}, headers=faculty_bearer_headers,
         )
 
-        # earliest created_at
-        row1 = db.query(FacultyEvaluation).filter(
-            FacultyEvaluation.faculty_id == "staff_faculty_test"
-        ).first()
-        row1.created_at = 100.0
-        db.commit()
+        get_mongo_db()["faculty_evaluations"].update_one(
+            {"session_id": s.id, "faculty_id": "staff_faculty_test"},
+            {"$set": {"created_at": 100.0}},
+        )
 
         client.post(
             f"/admin/exams/{exam.id}/evaluate/{s.id}",
             json={"coding_marks": {"p": 2}}, headers=f_other["headers"],
         )
-        row2 = db.query(FacultyEvaluation).filter(
-            FacultyEvaluation.faculty_id == f_other["id"]
-        ).first()
-        row2.created_at = 200.0
-        db.commit()
+        get_mongo_db()["faculty_evaluations"].update_one(
+            {"session_id": s.id, "faculty_id": f_other["id"]},
+            {"$set": {"created_at": 200.0}},
+        )
 
         # no param -> default (earliest = staff_faculty_test => 1)
         data = client.get(f"/admin/exams/{exam.id}/analytics", headers=admin_bearer_headers).json()["data"]
@@ -294,6 +318,13 @@ class TestLegacyContext:
         s.coding_evaluation = json.dumps({"legacy_cp": 7})
         s.subjective_evaluation = json.dumps({"legacy_sq": 3})
         db.commit()
+        get_mongo_db()["exam_sessions"].update_one(
+            {"_id": s.id},
+            {"$set": {
+                "coding_evaluation": s.coding_evaluation,
+                "subjective_evaluation": s.subjective_evaluation,
+            }},
+        )
 
         # Admin sees legacy values while no faculty eval exists
         admin = client.get(f"/admin/exams/{exam.id}/analytics", headers=admin_bearer_headers).json()["data"]

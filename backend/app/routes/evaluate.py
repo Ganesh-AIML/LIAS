@@ -3,34 +3,26 @@ import time
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from app.database import get_db
-from app.models import Exam, ExamSession, Question, CodingProblem, SubjectiveQuestion
 from app.limiter import limiter
+from app import repositories as repo
 
 from app.routes.admin import verify_admin, dedupe_sessions_per_student, require_exam_scope
 from app.evaluation_ctx import (
     get_or_create_faculty_eval,
-    get_faculty_eval,
     resolve_context,
     evaluation_material,
     ensure_faculty_writer,
-    parse_json,
 )
+from app.repositories import _AttrDict, parse_json
 
 router = APIRouter()
 logger = logging.getLogger("scope")
 
 
-def _compute_mcq_score(session: ExamSession, q_map: dict) -> float:
+def _compute_mcq_score(session, q_map: dict) -> float:
     """Re-compute MCQ score from submission_payload and question map."""
-    payload = {}
-    if session.submission_payload:
-        try:
-            payload = json.loads(session.submission_payload)
-        except Exception:
-            pass
+    payload = parse_json(session.submission_payload) if session.submission_payload else {}
     mcq_answers = payload.get("mcqs", {})
     total = 0.0
     for q_id, ans in mcq_answers.items():
@@ -59,7 +51,6 @@ def list_evaluate_students(
     exam_id: str,
     faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """List students for manual evaluation under ONE evaluation context.
 
@@ -67,22 +58,23 @@ def list_evaluate_students(
     - admin:   the selected faculty (query param) or the server-computed
                default; legacy marks only when nothing faculty-owned exists.
     """
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
-    ctx = resolve_context(staff, exam, db, faculty_id)
+    ctx = resolve_context(staff, exam, faculty_id)
 
-    questions = db.query(Question).filter(Question.exam_id == exam_id).all()
+    questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id})]
     q_map = {q.id: q for q in questions}
 
-    all_sessions = (
-        db.query(ExamSession)
-        .filter(ExamSession.exam_id == exam_id, ExamSession.is_submitted == True)
-        .order_by(ExamSession.created_at.asc())
-        .all()
+    _docs = repo.find_all(
+        "exam_sessions",
+        {"exam_id": exam_id, "is_submitted": True},
+        sort=[("created_at", 1)],
     )
+    all_sessions = [_AttrDict(d) for d in _docs]
     sessions = dedupe_sessions_per_student(all_sessions)
 
     result = []
@@ -91,7 +83,7 @@ def list_evaluate_students(
         if mcq_score is None:
             mcq_score = _compute_mcq_score(s, q_map)
 
-        material = evaluation_material(s, ctx, db)
+        material = evaluation_material(s, ctx)
         cod_sum = sum(material["coding_marks"].values())
         subj_sum = sum(material["subjective_marks"].values())
 
@@ -130,35 +122,27 @@ def get_evaluation_detail(
     session_id: str,
     faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
-    session = (
-        db.query(ExamSession)
-        .filter(ExamSession.id == session_id, ExamSession.exam_id == exam_id)
-        .first()
-    )
+    _doc = repo.find_one("exam_sessions", {"_id": session_id, "exam_id": exam_id})
+    session = _AttrDict(_doc) if _doc else None
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
-    ctx = resolve_context(staff, exam, db, faculty_id)
+    ctx = resolve_context(staff, exam, faculty_id)
 
-    questions = db.query(Question).filter(Question.exam_id == exam_id).all()
-    coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    subjective_questions = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
+    questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id})]
+    coding_probs = [_AttrDict(d) for d in repo.find_all("coding_problems", {"exam_id": exam_id})]
+    subjective_questions = [_AttrDict(d) for d in repo.find_all("subjective_questions", {"exam_id": exam_id})]
     q_map = {q.id: q for q in questions}
 
     # MCQ answers with correct/incorrect
-    payload = {}
-    if session.submission_payload:
-        try:
-            payload = json.loads(session.submission_payload)
-        except Exception:
-            pass
+    payload = parse_json(session.submission_payload) if session.submission_payload else {}
     mcq_answers = payload.get("mcqs", {})
 
     mcq_details = []
@@ -195,12 +179,7 @@ def get_evaluation_detail(
         })
 
     # Subjective answers
-    subj_payload = {}
-    if session.subjective_payload:
-        try:
-            subj_payload = json.loads(session.subjective_payload)
-        except Exception:
-            pass
+    subj_payload = parse_json(session.subjective_payload) if session.subjective_payload else {}
     subjective_details = []
     for sq in subjective_questions:
         subjective_details.append({
@@ -212,7 +191,7 @@ def get_evaluation_detail(
             "student_answer": subj_payload.get(sq.id, ""),
         })
 
-    material = evaluation_material(session, ctx, db)
+    material = evaluation_material(session, ctx)
     total = material["total_score"]
     if total is None:
         cod_sum = sum(material["coding_marks"].values())
@@ -247,56 +226,54 @@ def save_evaluation(
     session_id: str,
     payload: SaveEvaluationPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
-    session = (
-        db.query(ExamSession)
-        .filter(ExamSession.id == session_id, ExamSession.exam_id == exam_id)
-        .first()
-    )
+    _doc = repo.find_one("exam_sessions", {"_id": session_id, "exam_id": exam_id})
+    session = _AttrDict(_doc) if _doc else None
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
-    ensure_faculty_writer(staff)  # admin: strictly read-only (403)
+    ensure_faculty_writer(staff)
 
-    questions = db.query(Question).filter(Question.exam_id == exam_id).all()
+    questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id})]
     q_map = {q.id: q for q in questions}
 
-    # MCQ stays SYSTEM-GENERATED and shared; persisted for cheap reads.
     mcq_score = _compute_mcq_score(session, q_map)
-    session.mcq_score = mcq_score
 
     faculty_id = staff["id"]
-    faculty_eval = get_or_create_faculty_eval(db, session.id, faculty_id)
+    faculty_eval = get_or_create_faculty_eval(session.id, faculty_id)
 
-    # Merge coding marks — onto this faculty's OWN record only.
-    existing_coding = parse_json(faculty_eval.coding_marks)
+    is_dict = isinstance(faculty_eval, dict)
+    existing_coding = parse_json(faculty_eval.get("coding_marks") if is_dict else faculty_eval.get("coding_marks"))
     if payload.coding_marks:
         existing_coding.update(payload.coding_marks)
-    faculty_eval.coding_marks = json.dumps(existing_coding) if existing_coding else None
-
-    existing_subj = parse_json(faculty_eval.subjective_marks)
+    existing_subj = parse_json(faculty_eval.get("subjective_marks") if is_dict else faculty_eval.get("subjective_marks"))
     if payload.subjective_marks:
         existing_subj.update(payload.subjective_marks)
-    faculty_eval.subjective_marks = json.dumps(existing_subj) if existing_subj else None
-
     cod_sum = sum(existing_coding.values()) if existing_coding else 0
     subj_sum = sum(existing_subj.values()) if existing_subj else 0
-    faculty_eval.total_score = mcq_score + cod_sum + subj_sum
+    total_score = mcq_score + cod_sum + subj_sum
+    review_status = payload.review_status if payload.review_status in {None, "pending", "reviewed", "flagged"} else (faculty_eval.get("review_status") if is_dict else faculty_eval.get("review_status"))
+    update_fields = {
+        "coding_marks": existing_coding if existing_coding else None,
+        "subjective_marks": existing_subj if existing_subj else None,
+        "total_score": total_score,
+        "review_status": review_status,
+        "evaluated_at": time.time(),
+    }
+    eval_id = faculty_eval.get("_id") if is_dict else faculty_eval.get("id")
+    try:
+        repo.update_one("faculty_evaluations", {"_id": eval_id}, update_fields, upsert=True)
+        repo.update_one("exam_sessions", {"_id": session.id}, {"mcq_score": mcq_score})
+    except Exception:
+        logger.warning("[EVALUATE] Mongo write failed for save_evaluation")
 
-    if payload.review_status is not None:
-        valid_statuses = {None, "pending", "reviewed", "flagged"}
-        if payload.review_status in valid_statuses:
-            faculty_eval.review_status = payload.review_status
-
-    faculty_eval.evaluated_at = time.time()
-    db.commit()
-
+    total_score = mcq_score + (sum(existing_coding.values()) if existing_coding else 0) + (sum(existing_subj.values()) if existing_subj else 0)
     return {
         "success": True,
         "data": {
@@ -305,9 +282,9 @@ def save_evaluation(
             "mcq_score": mcq_score,
             "coding_marks": existing_coding,
             "subjective_marks": existing_subj,
-            "total_score": faculty_eval.total_score,
-            "review_status": faculty_eval.review_status,
-            "evaluated_at": faculty_eval.evaluated_at,
+            "total_score": total_score,
+            "review_status": review_status,
+            "evaluated_at": time.time(),
         },
     }
 
@@ -321,17 +298,14 @@ def clear_evaluation(
     exam_id: str,
     session_id: str,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
-    session = (
-        db.query(ExamSession)
-        .filter(ExamSession.id == session_id, ExamSession.exam_id == exam_id)
-        .first()
-    )
+    _doc = repo.find_one("exam_sessions", {"_id": session_id, "exam_id": exam_id})
+    session = _AttrDict(_doc) if _doc else None
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -339,21 +313,18 @@ def clear_evaluation(
     ensure_faculty_writer(staff)
 
     faculty_id = staff["id"]
-    faculty_eval = get_faculty_eval(db, session.id, faculty_id)
-    if not faculty_eval:
-        raise HTTPException(
-            status_code=404,
-            detail="No evaluation found for this faculty.",
-        )
 
-    questions = db.query(Question).filter(Question.exam_id == exam_id).all()
+    eval_doc = repo.find_one("faculty_evaluations", {"session_id": session.id, "faculty_id": faculty_id})
+    if not eval_doc:
+        raise HTTPException(status_code=404, detail="No evaluation found for this faculty.")
+    questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id})]
     q_map = {q.id: q for q in questions}
     mcq_score = _compute_mcq_score(session, q_map)
-    session.mcq_score = mcq_score
-
-    # Removing this faculty's record only — other faculty's marks are untouched.
-    db.delete(faculty_eval)
-    db.commit()
+    try:
+        repo.delete_one("faculty_evaluations", {"_id": eval_doc["_id"]})
+        repo.update_one("exam_sessions", {"_id": session.id}, {"mcq_score": mcq_score})
+    except Exception:
+        logger.warning("[EVALUATE] Mongo write failed for clear_evaluation")
 
     return {"success": True, "message": "Evaluation marks cleared."}
 
@@ -368,17 +339,14 @@ def set_review_status(
     session_id: str,
     payload: ReviewStatusPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
-    session = (
-        db.query(ExamSession)
-        .filter(ExamSession.id == session_id, ExamSession.exam_id == exam_id)
-        .first()
-    )
+    _doc = repo.find_one("exam_sessions", {"_id": session_id, "exam_id": exam_id})
+    session = _AttrDict(_doc) if _doc else None
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -389,14 +357,20 @@ def set_review_status(
     if payload.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid review status. Must be one of: {valid_statuses}")
 
-    faculty_eval = get_or_create_faculty_eval(db, session.id, staff["id"])
-    faculty_eval.review_status = payload.status
-    db.commit()
+    sess_id = session.id
+    faculty_eval = get_or_create_faculty_eval(sess_id, staff["id"])
+
+    is_dict = isinstance(faculty_eval, dict)
+    eval_id = faculty_eval.get("_id") if is_dict else faculty_eval.get("id")
+    try:
+        repo.update_one("faculty_evaluations", {"_id": eval_id}, {"review_status": payload.status})
+    except Exception:
+        logger.warning("[EVALUATE] Mongo write failed for set_review_status")
 
     return {
         "success": True,
         "data": {
-            "session_id": session.id,
-            "review_status": faculty_eval.review_status,
+            "session_id": sess_id,
+            "review_status": payload.status,
         },
     }

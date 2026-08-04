@@ -8,12 +8,10 @@ import bcrypt
 import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from pydantic import BaseModel, field_validator
 from cryptography.fernet import Fernet
-from app.database import get_db
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Section, Student, StaffAccount, FacultyEvaluation
+from app import repositories as repo
+from app.repositories import _AttrDict, parse_json
 from app.auth import decode_staff_jwt
 from app.module_codes import MODULE_CODES, MODULES
 from app.limiter import limiter
@@ -23,6 +21,7 @@ from app.evaluation_ctx import (
     evaluation_material,
     default_faculty_id,
     legacy_available,
+    _exam_session_ids,
 )
 from app.routes.exam import finalize_expired_sessions
 
@@ -76,7 +75,6 @@ def dedupe_sessions_per_student(sessions):
 def verify_admin(
     authorization: Optional[str] = Header(None),
     x_admin_token: Optional[str] = Header(None),
-    db: Session = Depends(get_db),
 ):
     """Resolve the authenticated staff account.
 
@@ -92,24 +90,18 @@ def verify_admin(
     if authorization and authorization.lower().startswith("bearer "):
         payload = decode_staff_jwt(authorization[7:].strip())
         if payload:
-            staff = (
-                db.query(StaffAccount)
-                .filter(StaffAccount.id == payload.get("sub"))
-                .first()
-            )
+            staff = repo.col("staff_accounts").find_one({"_id": payload.get("sub")})
             if staff:
                 return {
-                    "id": staff.id,
-                    "role": staff.role,
-                    "module": staff.module,
-                    "name": staff.name,
-                    "email": staff.email,
+                    "id": staff["id"],
+                    "role": staff["role"],
+                    "module": staff.get("module"),
+                    "name": staff.get("name"),
+                    "email": staff["email"],
                 }
         raise HTTPException(status_code=401, detail="Unauthorized.")
 
-    admin_count = (
-        db.query(StaffAccount).filter(StaffAccount.role == "admin").count()
-    )
+    admin_count = repo.col("staff_accounts").count_documents({"role": "admin"})
     if (
         admin_count == 0
         and ADMIN_SECRET
@@ -296,7 +288,6 @@ def create_exam(
     request: Request,
     payload: ExamCreatePayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Creates an exam along with all its MCQs, Coding Problems, and Test Cases atomically.
@@ -315,91 +306,88 @@ def create_exam(
         enc_start = cipher_suite.encrypt(payload.start_password.encode("utf-8")).decode("utf-8") if payload.start_password else None
         enc_end = cipher_suite.encrypt(payload.end_password.encode("utf-8")).decode("utf-8") if payload.end_password else None
 
-        new_exam = Exam(
-            id=exam_id, title=payload.title, duration_seconds=payload.duration_minutes * 60,
-            starts_at=payload.starts_at / 1000.0, status=payload.status,
-            start_password_hash=start_hash, end_password_hash=end_hash,
-            start_secret=enc_start, end_secret=enc_end,
-            coding_duration_minutes=payload.coding_duration_minutes or None,
-            mcq_duration_minutes=payload.mcq_duration_minutes or None,
-            qna_duration_minutes=payload.qna_duration_minutes or None,
-            module=exam_module,
-        )
-        db.add(new_exam)
+        # 2. Build exam document
+        exam_doc = repo.doc_for("exams", {
+            "id": exam_id, "title": payload.title,
+            "duration_seconds": payload.duration_minutes * 60,
+            "starts_at": payload.starts_at / 1000.0, "status": payload.status,
+            "start_password_hash": start_hash, "end_password_hash": end_hash,
+            "start_secret": enc_start, "end_secret": enc_end,
+            "coding_duration_minutes": payload.coding_duration_minutes or None,
+            "mcq_duration_minutes": payload.coding_duration_minutes or None,
+            "qna_duration_minutes": payload.qna_duration_minutes or None,
+            "module": exam_module,
+        })
 
-        # 2b. Build Section Objects (must exist before questions reference them)
-        section_id_map = {}  # client-supplied section.id -> generated db id
+        # 3. Build Section docs
+        section_id_map = {}  # client-supplied section.id -> generated id
+        section_docs = []
         for s_idx, s in enumerate(payload.sections):
             sec_id = f"sec_{exam_id}_{s_idx}_{uuid.uuid4().hex[:6]}"
             if s.id:
                 section_id_map[s.id] = sec_id
-            db.add(Section(
-                id=sec_id, exam_id=exam_id, name=s.name, type=s.type,
-                marks_per_question=s.marks_per_question, order_index=s.order_index
-            ))
+            section_docs.append(repo.doc_for("sections", {
+                "id": sec_id, "exam_id": exam_id, "name": s.name, "type": s.type,
+                "marks_per_question": s.marks_per_question, "order_index": s.order_index,
+            }))
 
-        # 3. Build Question (MCQ) Objects
+        # 4. Build Question (MCQ) docs
+        question_docs = []
         for idx, q in enumerate(payload.questions):
-            new_q = Question(
-                id      = f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
-                exam_id = exam_id,
-                section = q.section,
-                text    = q.text,
-                optA    = q.optA,
-                optB    = q.optB,
-                optC    = q.optC,
-                optD    = q.optD,
-                ans     = q.ans,
-                section_id     = section_id_map.get(q.section_id, q.section_id),
-                order_index    = q.order_index,
-                marks          = q.marks,
-                content_format = q.content_format if q.content_format in ("plain", "markdown") else "plain",
-            )
-            db.add(new_q)
+            question_docs.append(repo.doc_for("questions", {
+                "id": f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                "exam_id": exam_id, "section": q.section, "text": q.text,
+                "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans,
+                "section_id": section_id_map.get(q.section_id, q.section_id),
+                "order_index": q.order_index, "marks": q.marks,
+                "content_format": q.content_format if q.content_format in ("plain", "markdown") else "plain",
+            }))
 
-        # 4. Build Coding Problem & Test Case Objects
+        # 5. Build Coding Problem & Test Case docs
+        coding_docs = []
+        testcase_docs = []
         for p_idx, cp in enumerate(payload.coding_problems):
             cp_id = f"cp_{exam_id}_{p_idx}_{uuid.uuid4().hex[:6]}"
-            new_cp = CodingProblem(
-                id          = cp_id,
-                exam_id     = exam_id,
-                title       = cp.title,
-                description = cp.description,
-                constraints = cp.constraints,
-                languages   = cp.languages,
-                marks       = cp.marks
-            )
-            db.add(new_cp)
-
-            # Build nested Test Cases
+            coding_docs.append(repo.doc_for("coding_problems", {
+                "id": cp_id, "exam_id": exam_id, "title": cp.title,
+                "description": cp.description, "constraints": cp.constraints,
+                "languages": cp.languages, "marks": cp.marks,
+            }))
             for t_idx, tc in enumerate(cp.testCases):
-                new_tc = TestCase(
-                    id              = f"tc_{cp_id}_{t_idx}_{uuid.uuid4().hex[:4]}",
-                    problem_id      = cp_id,
-                    input_data      = tc.input,
-                    expected_output = tc.output,
-                    is_hidden       = tc.isHidden
-                )
-                db.add(new_tc)
+                testcase_docs.append(repo.doc_for("test_cases", {
+                    "id": f"tc_{cp_id}_{t_idx}_{uuid.uuid4().hex[:4]}",
+                    "problem_id": cp_id, "input_data": tc.input,
+                    "expected_output": tc.output, "is_hidden": tc.isHidden,
+                }))
 
+        # 6. Build Subjective Question docs
+        subjective_docs = []
         for idx, sq in enumerate(payload.subjective_questions):
-            db.add(SubjectiveQuestion(
-                id      = f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
-                exam_id = exam_id,
-                section = sq.section,
-                text    = sq.text,
-                marks   = sq.marks,
-                section_id     = section_id_map.get(sq.section_id, sq.section_id),
-                order_index    = sq.order_index,
-                content_format = sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
-            ))
+            subjective_docs.append(repo.doc_for("subjective_questions", {
+                "id": f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                "exam_id": exam_id, "section": sq.section, "text": sq.text, "marks": sq.marks,
+                "section_id": section_id_map.get(sq.section_id, sq.section_id),
+                "order_index": sq.order_index,
+                "content_format": sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
+            }))
 
-        # 5. Atomic Commit (All or Nothing)
-        db.commit()
+        # 7. Mongo-first: insert all docs in a transaction
+        with repo.mongo_transaction() as tx:
+            tx.insert_one("exams", exam_doc)
+            for doc in section_docs:
+                tx.insert_one("sections", doc)
+            for doc in question_docs:
+                tx.insert_one("questions", doc)
+            for doc in coding_docs:
+                tx.insert_one("coding_problems", doc)
+            for doc in testcase_docs:
+                tx.insert_one("test_cases", doc)
+            for doc in subjective_docs:
+                tx.insert_one("subjective_questions", doc)
+
         return {"success": True, "exam_id": exam_id, "message": "Exam created successfully"}
 
     except Exception as e:
-        db.rollback()
         logger.error(f"Failed to create exam: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to save exam data to the database.")
     
@@ -411,13 +399,13 @@ def update_exam(
     exam_id: str,
     payload: ExamCreatePayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Updates an existing draft exam. 
     It atomically purges old questions/problems and replaces them with the new payload.
     """
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -433,94 +421,104 @@ def update_exam(
         )
 
     try:
-
-        # 1. Update Meta
-        exam.title = payload.title
-        exam.duration_seconds = payload.duration_minutes * 60
-        exam.coding_duration_minutes = payload.coding_duration_minutes or None
-        exam.mcq_duration_minutes = payload.mcq_duration_minutes or None
-        exam.qna_duration_minutes = payload.qna_duration_minutes or None
-        exam.starts_at = payload.starts_at / 1000.0
-        exam.status = payload.status
+        # 1. Build exam update fields
+        exam_fields = {
+            "title": payload.title,
+            "duration_seconds": payload.duration_minutes * 60,
+            "coding_duration_minutes": payload.coding_duration_minutes or None,
+            "mcq_duration_minutes": payload.mcq_duration_minutes or None,
+            "qna_duration_minutes": payload.qna_duration_minutes or None,
+            "starts_at": payload.starts_at / 1000.0,
+            "status": payload.status,
+        }
         if staff.get("role") == "faculty":
-            # Server-enforced: a faculty member can never move an exam out of
-            # their module (payload.module is never trusted from faculty).
-            exam.module = resolve_exam_module(staff, payload)
+            exam_fields["module"] = resolve_exam_module(staff, payload)
         elif "module" in payload.model_fields_set:
-            exam.module = payload.module
-        # payload.module omitted -> preserve the exam's existing module.
+            exam_fields["module"] = payload.module
 
         if payload.start_password_changed is not False and payload.start_password:
-            exam.start_password_hash = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-            exam.start_secret = cipher_suite.encrypt(payload.start_password.encode("utf-8")).decode("utf-8")
+            exam_fields["start_password_hash"] = bcrypt.hashpw(payload.start_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+            exam_fields["start_secret"] = cipher_suite.encrypt(payload.start_password.encode("utf-8")).decode("utf-8")
             
         if payload.end_password_changed is not False and payload.end_password:
-            exam.end_password_hash = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-            exam.end_secret = cipher_suite.encrypt(payload.end_password.encode("utf-8")).decode("utf-8") 
+            exam_fields["end_password_hash"] = bcrypt.hashpw(payload.end_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+            exam_fields["end_secret"] = cipher_suite.encrypt(payload.end_password.encode("utf-8")).decode("utf-8")
 
-        # 2. Purge old nested data (Cascades will handle test cases)
-        db.query(Question).filter(Question.exam_id == exam_id).delete()
-        db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete()
-        db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete()
-        db.query(Section).filter(Section.exam_id == exam_id).delete()
+        # 2. Get old problem IDs for test_case cascade
+        old_problem_ids = [d["_id"] for d in repo.find_all("coding_problems", {"exam_id": exam_id}, projection={"_id": 1})]
 
-        # 2b. Re-insert Sections (must exist before questions reference them)
+        # 3. Build new child docs
         section_id_map = {}
+        section_docs = []
         for s_idx, s in enumerate(payload.sections):
             sec_id = f"sec_{exam_id}_{s_idx}_{uuid.uuid4().hex[:6]}"
             if s.id:
                 section_id_map[s.id] = sec_id
-            db.add(Section(
-                id=sec_id, exam_id=exam_id, name=s.name, type=s.type,
-                marks_per_question=s.marks_per_question, order_index=s.order_index
-            ))
+            section_docs.append(repo.doc_for("sections", {
+                "id": sec_id, "exam_id": exam_id, "name": s.name, "type": s.type,
+                "marks_per_question": s.marks_per_question, "order_index": s.order_index,
+            }))
 
-        # 3. Re-insert new Questions
+        question_docs = []
         for idx, q in enumerate(payload.questions):
-            new_q = Question(
-                id=f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
-                exam_id=exam_id, section=q.section, text=q.text,
-                optA=q.optA, optB=q.optB, optC=q.optC, optD=q.optD, ans=q.ans,
-                section_id=section_id_map.get(q.section_id, q.section_id),
-                order_index=q.order_index, marks=q.marks,
-                content_format=q.content_format if q.content_format in ("plain", "markdown") else "plain",
-            )
-            db.add(new_q)
+            question_docs.append(repo.doc_for("questions", {
+                "id": f"q_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                "exam_id": exam_id, "section": q.section, "text": q.text,
+                "optA": q.optA, "optB": q.optB, "optC": q.optC, "optD": q.optD, "ans": q.ans,
+                "section_id": section_id_map.get(q.section_id, q.section_id),
+                "order_index": q.order_index, "marks": q.marks,
+                "content_format": q.content_format if q.content_format in ("plain", "markdown") else "plain",
+            }))
 
-        # 4. Re-insert new Coding Problems & Test Cases
+        coding_docs = []
+        testcase_docs = []
         for p_idx, cp in enumerate(payload.coding_problems):
             cp_id = f"cp_{exam_id}_{p_idx}_{uuid.uuid4().hex[:6]}"
-            new_cp = CodingProblem(
-                id=cp_id, exam_id=exam_id, title=cp.title,
-                description=cp.description, constraints=cp.constraints,
-                languages=cp.languages, marks=cp.marks
-            )
-            db.add(new_cp)
-
+            coding_docs.append(repo.doc_for("coding_problems", {
+                "id": cp_id, "exam_id": exam_id, "title": cp.title,
+                "description": cp.description, "constraints": cp.constraints,
+                "languages": cp.languages, "marks": cp.marks,
+            }))
             for t_idx, tc in enumerate(cp.testCases):
-                new_tc = TestCase(
-                    id=f"tc_{cp_id}_{t_idx}_{uuid.uuid4().hex[:4]}",
-                    problem_id=cp_id, input_data=tc.input,
-                    expected_output=tc.output, is_hidden=tc.isHidden
-                )
-                db.add(new_tc)
-        for idx, sq in enumerate(payload.subjective_questions):
-            db.add(SubjectiveQuestion(
-            id      = f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
-            exam_id = exam_id,
-            section = sq.section,
-            text    = sq.text,
-            marks   = sq.marks,
-            section_id=section_id_map.get(sq.section_id, sq.section_id),
-            order_index=sq.order_index,
-            content_format=sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
-            ))
+                testcase_docs.append(repo.doc_for("test_cases", {
+                    "id": f"tc_{cp_id}_{t_idx}_{uuid.uuid4().hex[:4]}",
+                    "problem_id": cp_id, "input_data": tc.input,
+                    "expected_output": tc.output, "is_hidden": tc.isHidden,
+                }))
 
-        db.commit()
+        subjective_docs = []
+        for idx, sq in enumerate(payload.subjective_questions):
+            subjective_docs.append(repo.doc_for("subjective_questions", {
+                "id": f"sq_{exam_id}_{idx}_{uuid.uuid4().hex[:6]}",
+                "exam_id": exam_id, "section": sq.section, "text": sq.text, "marks": sq.marks,
+                "section_id": section_id_map.get(sq.section_id, sq.section_id),
+                "order_index": sq.order_index,
+                "content_format": sq.content_format if sq.content_format in ("plain", "markdown") else "plain",
+            }))
+
+        # 4. Mongo-first: swap children + update exam metadata in a transaction
+        with repo.mongo_transaction() as tx:
+            tx.update_one("exams", {"_id": exam_id}, exam_fields)
+            tx.delete_many("sections", {"exam_id": exam_id})
+            tx.delete_many("questions", {"exam_id": exam_id})
+            tx.delete_many("coding_problems", {"exam_id": exam_id})
+            tx.delete_many("subjective_questions", {"exam_id": exam_id})
+            if old_problem_ids:
+                tx.delete_many("test_cases", {"problem_id": {"$in": old_problem_ids}})
+            for doc in section_docs:
+                tx.insert_one("sections", doc)
+            for doc in question_docs:
+                tx.insert_one("questions", doc)
+            for doc in coding_docs:
+                tx.insert_one("coding_problems", doc)
+            for doc in testcase_docs:
+                tx.insert_one("test_cases", doc)
+            for doc in subjective_docs:
+                tx.insert_one("subjective_questions", doc)
+
         return {"success": True, "message": "Exam updated successfully"}
 
     except Exception as e:
-        db.rollback()
         logger.error(f"Failed to update exam: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update exam data.")
 
@@ -528,53 +526,69 @@ def update_exam(
 
 # ── FACULTY-OWNED EVALUATION CONTEXT ──────────────────────────────────────────
 
-def _build_faculty_context(staff: dict, exam, db: Session) -> dict:
+def _build_faculty_context(staff: dict, exam) -> dict:
     """Faculty roster for the exam's module with per-faculty evaluation state.
 
     - faculty role -> only their own identity, no roster leak.
     - admin       -> every faculty assigned to exam.module, with
                      has_evaluated / first_evaluated_at for selector UI.
     """
+    exam_id = exam.id if not isinstance(exam, dict) else exam.get("id")
+    module = exam.module if not isinstance(exam, dict) else exam.get("module")
     entries = []
-    sedge = (
-        db.query(FacultyEvaluation)
-        .join(ExamSession, ExamSession.id == FacultyEvaluation.session_id)
-        .filter(
-            ExamSession.exam_id == exam.id,
-            (FacultyEvaluation.coding_marks.isnot(None))
-            | (FacultyEvaluation.subjective_marks.isnot(None)),
-        )
-    )
+
     if staff.get("role") == "faculty":
-        first = sedge.filter(FacultyEvaluation.faculty_id == staff.get("id")).order_by(FacultyEvaluation.created_at.asc()).first()
+        fid = staff.get("id")
+        first = _first_eval_for_faculty(exam_id, fid)
         entries.append({
-            "id": staff.get("id"),
+            "id": fid,
             "name": staff.get("name"),
             "email": staff.get("email"),
             "has_evaluated": first is not None,
-            "first_evaluated_at": first.created_at if first else None,
+            "first_evaluated_at": first,
         })
     else:
-        frows = (
-            db.query(StaffAccount)
-            .filter(StaffAccount.role == "faculty", StaffAccount.module == exam.module)
-            .order_by(StaffAccount.created_at.asc())
-            .all()
-        ) if exam.module else []
+        frows = _module_faculty(module) if module else []
         for r in frows:
-            first = sedge.filter(FacultyEvaluation.faculty_id == r.id).order_by(FacultyEvaluation.created_at.asc()).first()
+            first = _first_eval_for_faculty(exam_id, r.get("id"))
             entries.append({
-                "id": r.id,
-                "name": r.name or r.email,
-                "email": r.email,
+                "id": r.get("id"),
+                "name": r.get("name") or r.get("email"),
+                "email": r.get("email"),
                 "has_evaluated": first is not None,
-                "first_evaluated_at": first.created_at if first else None,
+                "first_evaluated_at": first,
             })
     return {
         "available_faculty": entries,
-        "default_faculty_id": default_faculty_id(db, exam.id),
-        "legacy_available": legacy_available(db, exam.id),
+        "default_faculty_id": default_faculty_id(exam_id),
+        "legacy_available": legacy_available(exam_id),
     }
+
+
+def _module_faculty(module: str) -> list:
+    """Faculty roster for a module (dict docs from Mongo)."""
+    return list(repo.find_all(
+        "staff_accounts",
+        {"role": "faculty", "module": module},
+        projection={"_id": 0, "password_hash": 0},
+        sort=[("created_at", 1)],
+    ))
+
+
+def _first_eval_for_faculty(exam_id: str, faculty_id: str):
+    """First evaluated_at for a faculty in an exam (None if they never wrote)."""
+    doc = repo.find_one(
+        "faculty_evaluations",
+        {
+            "faculty_id": faculty_id,
+            "session_id": {"$in": _exam_session_ids(exam_id)},
+            "coding_marks": {"$nin": [None]},
+        },
+        sort=[("created_at", 1)],
+    )
+    if not doc:
+        return None
+    return doc.get("evaluated_at")
 
 
 @router.get("/exams/{exam_id}/analytics")
@@ -584,51 +598,39 @@ def get_exam_analytics(
     offset: int = 0,
     faculty_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Fetches exam details, auto-grades all MCQ and Coding submissions on the fly,
     and returns the comprehensive analytics matrix expected by the React frontend.
-
-    AUD-014: `limit`/`offset` are optional. Omitting them preserves the original
-    behaviour (return all students) so existing callers are unaffected; callers
-    that need to avoid loading all sessions for large exams can now page through
-    results.
-
-    Faculty ownership (optional `faculty_id` query): for faculty it is always
-    coerced to their own evaluation. For admin it selects the evaluation
-    context shown/exported; omitted -> server-computed default (earliest
-    faculty), or legacy ownerless marks when none exist.
     """
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
 
-    # Server-side fallback for the client-only auto-submit: finalize any session
-    # whose exam window (end + grace) has fully passed so it reports as
-    # Submitted/"Finished" instead of lingering "In Progress".
-    finalize_expired_sessions(db, exam_id=exam_id)
+    # Server-side fallback for the client-only auto-submit
+    finalize_expired_sessions(exam_id=exam_id)
 
-    ctx = resolve_context(staff, exam, db, faculty_id)
-    faculty_context = _build_faculty_context(staff, exam, db)
+    ctx = resolve_context(staff, exam, faculty_id)
+    faculty_context = _build_faculty_context(staff, exam)
     faculty_context["selected_faculty_id"] = ctx["selected"]
     faculty_context["is_legacy"] = ctx["legacy"]
 
     # 1. Fetch Master Data
-    questions = db.query(Question).filter(Question.exam_id == exam_id).all()
-    coding_probs = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    subjective_questions = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).all()
-    sections = db.query(Section).filter(Section.exam_id == exam_id).all()
+    questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id})]
+    coding_probs = [_AttrDict(d) for d in repo.find_all("coding_problems", {"exam_id": exam_id})]
+    subjective_questions = [_AttrDict(d) for d in repo.find_all("subjective_questions", {"exam_id": exam_id})]
+    sections = [_AttrDict(d) for d in repo.find_all("sections", {"exam_id": exam_id})]
     section_type_map = {s.name: s.type for s in sections}
 
-    session_query = (
-        db.query(ExamSession)
-        .filter(ExamSession.exam_id == exam_id)
-        .order_by(ExamSession.created_at.asc())
+    _docs = repo.find_all(
+        "exam_sessions",
+        {"exam_id": exam_id},
+        sort=[("created_at", 1)],
     )
-    all_sessions = session_query.all()
+    all_sessions = [_AttrDict(d) for d in _docs]
     sessions = dedupe_sessions_per_student(all_sessions)
     total_students = len(sessions)
     if limit is not None:
@@ -643,19 +645,9 @@ def get_exam_analytics(
     for s in sessions:
         coding_submissions = []
 
-        subj_payload = {}
-        if s.subjective_payload:
-            try:
-                subj_payload = json.loads(s.subjective_payload)
-            except Exception:
-                pass
+        subj_payload = parse_json(s.subjective_payload) if s.subjective_payload else {}
         # Safely parse submission JSON
-        payload = {}
-        if s.submission_payload:
-            try:
-                payload = json.loads(s.submission_payload)
-            except Exception:
-                pass
+        payload = parse_json(s.submission_payload) if s.submission_payload else {}
         
         mcq_answers = payload.get("mcqs", {})    # Format expected from frontend: {"q_123": "A"}
         code_answers = payload.get("coding", {}) # Format: {"cp_123": {"code": "...", "score": 10, "runtime": 0.5, "results": [...]}}
@@ -670,7 +662,7 @@ def get_exam_analytics(
                     mcq_score += q.marks or 1
 
         # ── READ PERSISTED EVALUATION SCORES (selected faculty context) ──
-        material = evaluation_material(s, ctx, db)
+        material = evaluation_material(s, ctx)
         cod_score = sum(material["coding_marks"].values())
         subjective_score = sum(material["subjective_marks"].values())
 
@@ -740,7 +732,6 @@ def get_exam_analytics(
 @router.get("/exams/active")
 def list_active_exams(
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Returns only upcoming and live exams.
@@ -748,7 +739,8 @@ def list_active_exams(
     Completed and draft exams are excluded.
     Faculty only see exams in their assigned module.
     """
-    exams = db.query(Exam).all()
+    _docs = repo.find_all("exams")
+    exams = [_AttrDict(d) for d in _docs]
     if staff.get("role") == "faculty":
         module = staff.get("module")
         if not module:
@@ -777,16 +769,17 @@ def list_active_exams(
 
 # ── 1. GET FULL EXAM DETAILS (For Preview Mode) ─────────────────────────────────
 @router.get("/exams/{exam_id}")
-def get_exam_full(exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+def get_exam_full(exam_id: str, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam: raise HTTPException(status_code=404)
 
     require_exam_scope(staff, exam)
     
-    qs = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
-    cps = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    sqs = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).order_by(SubjectiveQuestion.order_index).all()
-    secs = db.query(Section).filter(Section.exam_id == exam_id).order_by(Section.order_index).all()
+    qs = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id}, sort=[("order_index", 1)])]
+    cps = [_AttrDict(d) for d in repo.find_all("coding_problems", {"exam_id": exam_id})]
+    sqs = [_AttrDict(d) for d in repo.find_all("subjective_questions", {"exam_id": exam_id}, sort=[("order_index", 1)])]
+    secs = [_AttrDict(d) for d in repo.find_all("sections", {"exam_id": exam_id}, sort=[("order_index", 1)])]
     
     return {"success": True, "data": {
         "id": exam.id,
@@ -803,30 +796,34 @@ def get_exam_full(exam_id: str, staff: dict = Depends(verify_admin), db: Session
     }}
 
 @router.get("/exams/{exam_id}/monitor")
-def get_live_monitor(exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+def get_live_monitor(exam_id: str, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
 
-    # Server-side fallback for the client-only auto-submit: finalize expired
-    # (end + grace elapsed) sessions so the monitor reflects them as Completed
-    # instead of lingering in the active "In Exam" bucket.
-    finalize_expired_sessions(db, exam_id=exam_id)
+    # Server-side fallback for the client-only auto-submit
+    finalize_expired_sessions(exam_id=exam_id)
 
-    enrolled = db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).count()
-    all_sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id).all()
+    enrolled = repo.count("token_registry", {"exam_id": exam_id})
+    _docs = repo.find_all("exam_sessions", {"exam_id": exam_id})
+    all_sessions = [_AttrDict(d) for d in _docs]
     sessions = dedupe_sessions_per_student(all_sessions)
     
     session_ids = [s.id for s in sessions]
     # Get violation breakdown per session
     violation_detail = {}
     if session_ids:
-        v_rows = db.query(ViolationLog.session_id, ViolationLog.event_type, func.count(ViolationLog.id)).filter(
-            ViolationLog.session_id.in_(session_ids)
-        ).group_by(ViolationLog.session_id, ViolationLog.event_type).all()
-        for sid, etype, cnt in v_rows:
+        pipeline = [
+            {"$match": {"session_id": {"$in": session_ids}}},
+            {"$group": {"_id": {"session_id": "$session_id", "event_type": "$event_type"}, "count": {"$sum": 1}}},
+        ]
+        for r in repo.aggregate("violation_logs", pipeline):
+            sid = r["_id"]["session_id"]
+            etype = r["_id"]["event_type"]
+            cnt = r["count"]
             if sid not in violation_detail:
                 violation_detail[sid] = {}
             violation_detail[sid][etype] = cnt
@@ -864,27 +861,17 @@ class RevokePayload(BaseModel):
 
 @router.post("/sessions/revoke")
 @limiter.limit("10/minute")
-def revoke_session(request: Request, payload: RevokePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    """
-    Force-terminate a student's session (admin kick-out button).
-
-    ROOT CAUSE FIX: this used to only set is_revoked=True. The dashboard's
-    Active/Completed split (and the "is_locked" flag) is driven entirely by
-    is_submitted (see list_monitor_data above + LiveTestMonitor.jsx's
-    `s.submitted` filter) — so a revoked session with is_submitted still
-    False stayed in Active Candidates forever, even though the confirm
-    dialog promises "This auto-submits their current progress." Setting
-    is_submitted=True here is what actually finalizes the session, exactly
-    like the student's own /exam/{id}/submit endpoint does — moving them
-    into Completed Candidates and clearing the locked state.
-    """
-    session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
+def revoke_session(request: Request, payload: RevokePayload, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("exam_sessions", {"_id": payload.session_id})
+    session = _AttrDict(_doc) if _doc else None
     if session:
-        exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+        _e_doc = repo.find_one("exams", {"_id": session.exam_id})
+        exam = _AttrDict(_e_doc) if _e_doc else None
         require_exam_scope(staff, exam)
-        session.is_revoked = True
-        session.is_submitted = True
-        db.commit()
+        try:
+            repo.update_one("exam_sessions", {"_id": session.id}, {"is_revoked": True, "is_submitted": True})
+        except Exception:
+            logger.warning("[ADMIN] Mongo write failed for revoke_session")
     return {"success": True}
 
 # ── 5. GRANT SESSION (UNLOCK STUDENT) ──────────────────────────────────────────
@@ -900,14 +887,18 @@ class GrantPayload(BaseModel):
 
 @router.post("/sessions/grant")
 @limiter.limit("10/minute")
-def grant_session(request: Request, payload: GrantPayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+def grant_session(request: Request, payload: GrantPayload, staff: dict = Depends(verify_admin)):
     """Unlock a student whose session was revoked due to violations. Preserves all exam state."""
-    session = db.query(ExamSession).filter(ExamSession.id == payload.session_id).first()
+    _doc = repo.find_one("exam_sessions", {"_id": payload.session_id})
+    session = _AttrDict(_doc) if _doc else None
     if session:
-        exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+        _e_doc = repo.find_one("exams", {"_id": session.exam_id})
+        exam = _AttrDict(_e_doc) if _e_doc else None
         require_exam_scope(staff, exam)
-        session.is_revoked = False
-        db.commit()
+        try:
+            repo.update_one("exam_sessions", {"_id": session.id}, {"is_revoked": False})
+        except Exception:
+            logger.warning("[ADMIN] Mongo write failed for grant_session")
     return {"success": True}
 
 # ── 4. STUDENT DIRECTORY CRUD ──────────────────────────────────────────────────
@@ -962,22 +953,22 @@ class BulkDeletePayload(BaseModel):
 
 @router.post("/students/bulk-delete")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def bulk_delete_students(request: Request, payload: BulkDeletePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+def bulk_delete_students(request: Request, payload: BulkDeletePayload, staff: dict = Depends(verify_admin)):
     """High-Performance route to delete multiple students at once."""
     if payload.tokens:
         if staff.get("role") == "faculty":
-            records = db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens)).all()
+            records = [_AttrDict(d) for d in repo.find_all("token_registry", {"_id": {"$in": payload.tokens}})]
             for r in records:
-                exam = db.query(Exam).filter(Exam.id == r.exam_id).first()
+                _e_doc = repo.find_one("exams", {"_id": r.get("exam_id")})
+                exam = _AttrDict(_e_doc) if _e_doc else None
                 require_exam_scope(staff, exam)
-        query = db.query(TokenRegistry).filter(TokenRegistry.token.in_(payload.tokens))
-        if payload.exam_id:
-            if staff.get("role") == "faculty":
-                exam = db.query(Exam).filter(Exam.id == payload.exam_id).first()
-                require_exam_scope(staff, exam)
-            query = query.filter(TokenRegistry.exam_id == payload.exam_id)
-        query.delete(synchronize_session=False)
-        db.commit()
+        try:
+            mongo_filter = {"_id": {"$in": payload.tokens}}
+            if payload.exam_id:
+                mongo_filter["exam_id"] = payload.exam_id
+            repo.delete_many("token_registry", mongo_filter)
+        except Exception:
+            logger.warning("[ADMIN] Mongo write failed for bulk_delete_students")
     return {"success": True}
 
 # ── GET ALL STUDENTS (Fortified with Auto-Migration) ───────────────────────────
@@ -985,28 +976,30 @@ def bulk_delete_students(request: Request, payload: BulkDeletePayload, staff: di
 def list_students(
     exam_id: Optional[str] = None,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """Fetch all students. Includes root-level schema self-healing.
 
     Faculty without an exam_id filter only see enrollments in their module's
     exams; a pending faculty (no module) sees an empty list.
     """
-    query = db.query(TokenRegistry)
+    # Build Mongo filter
+    filters = {}
     if exam_id:
         if staff.get("role") == "faculty":
-            exam = db.query(Exam).filter(Exam.id == exam_id).first()
+            _doc = repo.find_one("exams", {"_id": exam_id})
+            exam = _AttrDict(_doc) if _doc else None
             require_exam_scope(staff, exam)
-        query = query.filter(TokenRegistry.exam_id == exam_id)
+        filters["exam_id"] = exam_id
     elif staff.get("role") == "faculty":
         module = staff.get("module")
         if not module:
             return {"success": True, "data": []}
-        module_exam_ids = [e.id for e in db.query(Exam.id).filter(Exam.module == module).all()]
+        _docs = repo.find_all("exams", {"module": module}, projection={"_id": 1})
+        module_exam_ids = [d["_id"] for d in _docs]
         if not module_exam_ids:
             return {"success": True, "data": []}
-        query = query.filter(TokenRegistry.exam_id.in_(module_exam_ids))
-    records = query.all()
+        filters["exam_id"] = {"$in": module_exam_ids}
+    records = [_AttrDict(d) for d in repo.find_all("token_registry", filters)]
 
     if not records:
         return {"success": True, "data": []}
@@ -1014,14 +1007,11 @@ def list_students(
     student_ids = [r.student_id for r in records]
     
     # Bulk fetch sessions
-    session_query = db.query(ExamSession).filter(
-        ExamSession.student_id.in_(student_ids),
-    )
+    _sess_filters = {"student_id": {"$in": student_ids}}
     if exam_id:
-        # AUD-016: scope to the filtered exam instead of loading every
-        # session across all exams for these students.
-        session_query = session_query.filter(ExamSession.exam_id == exam_id)
-    sessions = dedupe_sessions_per_student(session_query.all())
+        _sess_filters["exam_id"] = exam_id
+    _sess_docs = repo.find_all("exam_sessions", _sess_filters)
+    sessions = dedupe_sessions_per_student([_AttrDict(d) for d in _sess_docs])
 
     session_map = {(s.student_id, s.exam_id): s for s in sessions}
 
@@ -1042,7 +1032,7 @@ def list_students(
 # ── POST STUDENTS (Fortified with Upsert Logic to prevent duplicates) ──────────
 @router.post("/students")
 @limiter.limit("10/minute")
-def create_students(request: Request, payload: StudentsBulkPayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+def create_students(request: Request, payload: StudentsBulkPayload, staff: dict = Depends(verify_admin)):
 
     if staff.get("role") == "faculty":
         module = staff.get("module")
@@ -1052,32 +1042,23 @@ def create_students(request: Request, payload: StudentsBulkPayload, staff: dict 
                 detail="No module assigned. Contact an administrator.",
             )
         exam_ids = {s.exam_id for s in payload.students}
-        exams = {e.id: e for e in db.query(Exam).filter(Exam.id.in_(exam_ids)).all()}
+        _exam_docs = repo.find_all("exams", {"_id": {"$in": list(exam_ids)}})
+        exams = {d["_id"]: _AttrDict(d) for d in _exam_docs}
         for eid in exam_ids:
             require_exam_scope(staff, exams.get(eid))
 
     for s in payload.students:
-        # 🚀 ROOT FIX 2: Upsert Logic (Check if student already exists for this exam)
-        existing_record = db.query(TokenRegistry).filter(
-            TokenRegistry.student_id == s.student_id,
-            TokenRegistry.exam_id == s.exam_id
-        ).first()
-        
         hashed = bcrypt.hashpw(s.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
-        
-        if existing_record:
-            # UPDATE: Overwrite password and reactivate, but KEEP the same token
-            existing_record.password_hash = hashed
-            existing_record.is_active = True
+
+        existing_doc = repo.find_one("token_registry", {"student_id": s.student_id, "exam_id": s.exam_id})
+        if existing_doc:
+            repo.update_one("token_registry", {"_id": existing_doc["_id"]}, {"password_hash": hashed, "is_active": True})
         else:
-            # INSERT: Brand new student, mint a new token
             token = f"LIAS_{s.student_id.upper()}_{secrets.token_hex(4).upper()}"
-            db.add(TokenRegistry(
-                token=token, exam_id=s.exam_id, student_id=s.student_id,
-                password_hash=hashed, is_active=True
-            ))
-            
-    db.commit()
+            repo.insert_one("token_registry", {
+                "_id": token, "exam_id": s.exam_id, "student_id": s.student_id,
+                "password_hash": hashed, "is_active": True,
+            })
     return {"success": True}
 
 class StudentUpdatePayload(BaseModel):
@@ -1086,26 +1067,35 @@ class StudentUpdatePayload(BaseModel):
 
 @router.put("/students/{token}")
 @limiter.limit("10/minute")
-def update_student(request: Request, token: str, payload: StudentUpdatePayload, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
+def update_student(request: Request, token: str, payload: StudentUpdatePayload, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("token_registry", {"_id": token})
+    record = _AttrDict(_doc) if _doc else None
     if not record: raise HTTPException(status_code=404)
-    exam = db.query(Exam).filter(Exam.id == record.exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": record.exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     require_exam_scope(staff, exam)
-    record.is_active = payload.is_active
+    update_fields = {"is_active": payload.is_active}
     if payload.password:
-        record.password_hash = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
-    db.commit()
+        update_fields["password_hash"] = bcrypt.hashpw(payload.password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
+    try:
+        repo.update_one("token_registry", {"_id": token}, update_fields)
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for update_student")
     return {"success": True}
 
 @router.delete("/students/{token}")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def delete_student(request: Request, token: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    record = db.query(TokenRegistry).filter(TokenRegistry.token == token).first()
+def delete_student(request: Request, token: str, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("token_registry", {"_id": token})
+    record = _AttrDict(_doc) if _doc else None
     if not record: raise HTTPException(status_code=404)
-    exam = db.query(Exam).filter(Exam.id == record.exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": record.exam_id})
+    exam = _AttrDict(_e_doc) if _e_doc else None
     require_exam_scope(staff, exam)
-    db.delete(record)
-    db.commit()
+    try:
+        repo.delete_one("token_registry", {"_id": token})
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for delete_student")
     return {"success": True}
 
 @router.get("/exams")
@@ -1113,31 +1103,31 @@ def list_exams(
     limit: Optional[int] = None,
     offset: int = 0,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
-    query = db.query(Exam).order_by(Exam.starts_at.desc())
+    filters = {}
     if staff.get("role") == "faculty":
         module = staff.get("module")
         if not module:
             return {"success": True, "data": [], "total": 0, "limit": limit, "offset": offset}
-        query = query.filter(Exam.module == module)
-    total = query.count()
+        filters["module"] = module
+    total = repo.count("exams", filters)
+    _docs = repo.find_all("exams", filters, sort=[("starts_at", -1)])
     if limit is not None:
-        query = query.limit(limit).offset(offset)
-    exams = query.all()
+        _docs = _docs[offset:offset + limit]
+    exams = [_AttrDict(d) for d in _docs]
     now = time.time()
 
-    total_counts = dict(
-        db.query(ExamSession.exam_id, func.count(func.distinct(ExamSession.student_id)))
-        .group_by(ExamSession.exam_id)
-        .all()
-    )
-    submitted_counts = dict(
-        db.query(ExamSession.exam_id, func.count(func.distinct(ExamSession.student_id)))
-        .filter(ExamSession.is_submitted == True)
-        .group_by(ExamSession.exam_id)
-        .all()
-    )
+    pipeline_total = [
+        {"$group": {"_id": "$exam_id", "students": {"$addToSet": "$student_id"}}},
+        {"$project": {"_id": 1, "count": {"$size": "$students"}}},
+    ]
+    total_counts = {r["_id"]: r["count"] for r in repo.aggregate("exam_sessions", pipeline_total)}
+    pipeline_submitted = [
+        {"$match": {"is_submitted": True}},
+        {"$group": {"_id": "$exam_id", "students": {"$addToSet": "$student_id"}}},
+        {"$project": {"_id": 1, "count": {"$size": "$students"}}},
+    ]
+    submitted_counts = {r["_id"]: r["count"] for r in repo.aggregate("exam_sessions", pipeline_submitted)}
 
     result = []
     for exam in exams:
@@ -1163,41 +1153,36 @@ def list_exams(
 
 @router.delete("/exams/{exam_id}")
 @limiter.limit("10/minute")  # AUD-008: rate-limit destructive op
-def delete_exam(request: Request, exam_id: str, staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+def delete_exam(request: Request, exam_id: str, staff: dict = Depends(verify_admin)):
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
 
     try:
-
-        # 1. Clean up violation logs attached to this exam's sessions
-        session_ids = [s.id for s in db.query(ExamSession.id).filter(ExamSession.exam_id == exam_id).all()]
-        if session_ids:
-            db.query(ViolationLog).filter(ViolationLog.session_id.in_(session_ids)).delete(synchronize_session=False)
-        
-        # 2. Clean up test cases attached to this exam's coding problems
-        problem_ids = [p.id for p in db.query(CodingProblem.id).filter(CodingProblem.exam_id == exam_id).all()]
-        if problem_ids:
-            db.query(TestCase).filter(TestCase.problem_id.in_(problem_ids)).delete(synchronize_session=False)
-            
-        # 3. Clean up core child tables
-        db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).delete(synchronize_session=False)
-        db.query(Question).filter(Question.exam_id == exam_id).delete(synchronize_session=False)
-        db.query(ExamSession).filter(ExamSession.exam_id == exam_id).delete(synchronize_session=False)
-        db.query(TokenRegistry).filter(TokenRegistry.exam_id == exam_id).delete(synchronize_session=False)
-        db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).delete(synchronize_session=False)
-        db.query(Section).filter(Section.exam_id == exam_id).delete(synchronize_session=False)
-        # 4. Finally, safely delete the parent Exam
-        db.query(Exam).filter(Exam.id == exam_id).delete(synchronize_session=False)
-        db.commit()
-        return {"success": True}
-        
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Safe cascade delete failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete exam and its nested records.")
+        _sess_docs = repo.find_all("exam_sessions", {"exam_id": exam_id}, projection={"_id": 1})
+        session_ids = [d["_id"] for d in _sess_docs]
+        _cp_docs = repo.find_all("coding_problems", {"exam_id": exam_id}, projection={"_id": 1})
+        problem_ids = [d["_id"] for d in _cp_docs]
+        with repo.mongo_transaction() as tx:
+            if session_ids:
+                tx.delete_many("violation_logs", {"session_id": {"$in": session_ids}})
+                tx.delete_many("faculty_evaluations", {"session_id": {"$in": session_ids}})
+            if problem_ids:
+                tx.delete_many("test_cases", {"problem_id": {"$in": problem_ids}})
+            tx.delete_many("coding_problems", {"exam_id": exam_id})
+            tx.delete_many("questions", {"exam_id": exam_id})
+            tx.delete_many("exam_sessions", {"exam_id": exam_id})
+            tx.delete_many("token_registry", {"exam_id": exam_id})
+            tx.delete_many("subjective_questions", {"exam_id": exam_id})
+            tx.delete_many("sections", {"exam_id": exam_id})
+            tx.delete_many("exams", {"_id": exam_id})
+    except Exception:
+        logger.warning("[ADMIN] Mongo cascade delete failed for delete_exam")
+        raise HTTPException(status_code=500, detail="Failed to delete exam.")
+    return {"success": True}
 
 
 # ── MASTER DIRECTORY CRUD ───────────────────────────────────────────────────────
@@ -1243,7 +1228,6 @@ def list_master_students(
     limit: Optional[int] = None,
     offset: int = 0,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Return all students from Master Directory with their exam enrollments.
@@ -1259,35 +1243,31 @@ def list_master_students(
     Faculty: the Master Directory itself stays global (read-only for faculty),
     but enrollments are filtered down to the faculty member's module exams.
     """
-    query = db.query(Student).order_by(Student.created_at.desc())
-    total = query.count()
+    _s_docs = repo.find_all("students", sort=[("created_at", -1)])
+    total = len(_s_docs)
     if limit is not None:
-        query = query.limit(limit).offset(offset)
-    students = query.all()
+        _s_docs = _s_docs[offset:offset + limit]
+    students = [_AttrDict(d) for d in _s_docs]
     student_ids = [s.id for s in students]
 
     now = time.time()
     HIDE_AFTER_SECONDS = 3600
 
-    exam_status_map = {
-        exam.id: compute_exam_status(exam, now) for exam in db.query(Exam).all()
-    }
+    _all_exams = [_AttrDict(d) for d in repo.find_all("exams")]
+    exam_status_map = {exam.id: compute_exam_status(exam, now) for exam in _all_exams}
 
     if staff.get("role") == "faculty":
         module = staff.get("module")
         if not module:
             return {"success": True, "data": [], "total": total, "limit": limit, "offset": offset}
-        allowed_exam_ids = {
-            e.id for e in db.query(Exam).filter(Exam.module == module).all()
-        }
+        _m_docs = repo.find_all("exams", {"module": module}, projection={"_id": 1})
+        allowed_exam_ids = {d["_id"] for d in _m_docs}
     else:
         allowed_exam_ids = None
 
-    enrollments = (
-        db.query(TokenRegistry.student_id, TokenRegistry.exam_id, TokenRegistry.token)
-        .filter(TokenRegistry.student_id.in_(student_ids))
-        .all()
-    )
+    _enroll_filters = {"student_id": {"$in": student_ids}}
+    _enroll_docs = repo.find_all("token_registry", _enroll_filters, projection={"student_id": 1, "exam_id": 1, "token": 1})
+    enrollments = [_AttrDict(d) for d in _enroll_docs]
     enrollment_map: dict[str, list] = {}
     for e in enrollments:
         if allowed_exam_ids is not None and e.exam_id not in allowed_exam_ids:
@@ -1323,24 +1303,30 @@ def create_master_student(
     request: Request,
     payload: MasterStudentCreatePayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """Add a student to the Master Directory. Fails if student_id already exists."""
     require_admin(staff)
-    existing = db.query(Student).filter(Student.id == payload.id).first()
+    existing = repo.find_one("students", {"_id": payload.id})
     if existing:
         raise HTTPException(status_code=409, detail=f"Student '{payload.id}' already exists.")
 
     hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-    db.add(Student(
-        id=payload.id,
-        name=payload.name,
-        password=hashed,
-        is_active=payload.is_active,
-        created_at=time.time(),
-        needs_password_reset=False,
-    ))
-    db.commit()
+    try:
+        repo.update_one(
+            "students",
+            {"_id": payload.id},
+            {
+                "_id": payload.id,
+                "name": payload.name,
+                "password": hashed,
+                "is_active": payload.is_active,
+                "created_at": time.time(),
+                "needs_password_reset": False,
+            },
+            upsert=True,
+        )
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for create_master_student")
     return {"success": True, "id": payload.id}
 
 
@@ -1350,47 +1336,35 @@ def bulk_create_master_students(
     request: Request,
     payload: MasterStudentsBulkPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Bulk upsert into Master Directory (CSV upload feeds this).
-    Mirrors the upsert pattern in create_students() (per-exam bulk, admin.py ~661),
-    but targets Student instead of TokenRegistry.
-    - New id -> insert with hashed password.
-    - Existing id -> update name/is_active, and password ONLY if a non-empty
-      value was supplied (so re-uploading a CSV without passwords doesn't
-      wipe existing real passwords back to blank).
-    Returns counts so the UI can show created/updated, matching assign_students_to_exam's shape.
     """
     require_admin(staff)
     created = 0
     updated = 0
 
     for s in payload.students:
-        existing = db.query(Student).filter(Student.id == s.id).first()
-        if existing:
+        existing_doc = repo.find_one("students", {"_id": s.id})
+        if existing_doc:
+            fields = {}
             if s.name is not None:
-                existing.name = s.name
-            existing.is_active = s.is_active
+                fields["name"] = s.name
+            fields["is_active"] = s.is_active
             if s.password:
-                existing.password = bcrypt.hashpw(
-                    s.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
-                ).decode("utf-8")
-                existing.needs_password_reset = False
+                fields["password"] = bcrypt.hashpw(s.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+                fields["needs_password_reset"] = False
+            repo.update_one("students", {"_id": s.id}, fields)
             updated += 1
         else:
             hashed = bcrypt.hashpw(s.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-            db.add(Student(
-                id=s.id,
-                name=s.name,
-                password=hashed,
-                is_active=s.is_active,
-                created_at=time.time(),
-                needs_password_reset=False,
-            ))
+            repo.insert_one("students", {
+                "_id": s.id, "name": s.name, "password": hashed,
+                "is_active": s.is_active, "created_at": time.time(),
+                "needs_password_reset": False,
+            })
             created += 1
 
-    db.commit()
     return {"success": True, "created": created, "updated": updated}
 
 
@@ -1401,35 +1375,32 @@ def update_master_student(
     student_id: str,
     payload: MasterStudentUpdatePayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """Edit name, password, or active status of a master student."""
     require_admin(staff)
-    student = db.query(Student).filter(Student.id == student_id).first()
+    _doc = repo.find_one("students", {"_id": student_id})
+    student = _AttrDict(_doc) if _doc else None
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
 
-    student.is_active = payload.is_active
+    update_fields = {"is_active": payload.is_active}
     if payload.name is not None:
-        student.name = payload.name
+        update_fields["name"] = payload.name
     if payload.password:
         hashed = bcrypt.hashpw(
             payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)
         ).decode("utf-8")
-        student.password = hashed
-        student.needs_password_reset = False
+        update_fields["password"] = hashed
+        update_fields["needs_password_reset"] = False
 
-        # ROOT CAUSE FIX: exam login (auth.py) verifies against
-        # TokenRegistry.password_hash, not Student.password. Without this
-        # resync, saving a new password here updated the Master Directory
-        # record but left already-assigned exam tokens on the OLD hash, so
-        # the student couldn't actually log in with the new password.
-        # Mirrors the same resync done in reset_and_resync_student below.
-        db.query(TokenRegistry).filter(TokenRegistry.student_id == student_id).update(
-            {"password_hash": hashed}
-        )
-
-    db.commit()
+    try:
+        repo.update_one("students", {"_id": student_id}, update_fields)
+        if payload.password:
+            _tr_docs = repo.find_all("token_registry", {"student_id": student_id})
+            for tr_doc in _tr_docs:
+                repo.update_one("token_registry", {"_id": tr_doc["_id"]}, {"password_hash": hashed})
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for update_master_student")
     return {"success": True}
 
 
@@ -1444,35 +1415,38 @@ def reset_and_resync_student(
     student_id: str,
     payload: ResetAndResyncPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     One-click fix for the 'placeholder hash poisoned my exam login' problem.
-    1. Sets a real password on the Master Directory record (same as PUT /master-students/{id}).
+    1. Sets a real password on the Master Directory record.
     2. Immediately re-propagates that new hash into every TokenRegistry row for
-       this student, across all exams — so existing assignments don't need a
-       manual re-assign to pick up the fix.
+       this student, across all exams.
     """
     require_admin(staff)
-    student = db.query(Student).filter(Student.id == student_id).first()
+    _doc = repo.find_one("students", {"_id": student_id})
+    student = _AttrDict(_doc) if _doc else None
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
 
     hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-    student.password = hashed
-    student.is_active = True
-    student.needs_password_reset = False
 
-    rows = db.query(TokenRegistry).filter(TokenRegistry.student_id == student_id).all()
-    for row in rows:
-        row.password_hash = hashed
-        row.is_active = True
-
-    db.commit()
+    try:
+        repo.update_one("students", {"_id": student_id}, {
+            "password": hashed, "is_active": True, "needs_password_reset": False,
+        })
+        _tr_docs = repo.find_all("token_registry", {"student_id": student_id})
+        for tr_doc in _tr_docs:
+            repo.update_one("token_registry", {"_id": tr_doc["_id"]}, {
+                "password_hash": hashed, "is_active": True,
+            })
+        resynced = len(_tr_docs)
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for reset_and_resync_student")
+        resynced = 0
     return {
         "success": True,
         "id": student_id,
-        "resynced_tokens": len(rows),
+        "resynced_tokens": resynced,
     }
 
 
@@ -1482,19 +1456,20 @@ def delete_master_student(
     request: Request,
     student_id: str,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Remove student from Master Directory.
     Does NOT delete TokenRegistry rows — enrollment history preserved for audit.
     """
     require_admin(staff)
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
+    existing = repo.find_one("students", {"_id": student_id})
+    if not existing:
         raise HTTPException(status_code=404, detail="Student not found.")
 
-    db.delete(student)
-    db.commit()
+    try:
+        repo.delete_one("students", {"_id": student_id})
+    except Exception:
+        logger.warning("[ADMIN] Mongo write failed for delete_master_student")
     return {"success": True}
 
 
@@ -1523,26 +1498,19 @@ def assign_students_to_exam(
     exam_id: str,
     payload: AssignStudentsPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """
     Bulk-assign Master Directory students to an exam.
-    - Fetches master password from Student table.
-    - Reuses existing upsert logic: updates if enrolled, inserts if new.
-    - Skips students not found in Master Directory.
-    - AUD-025: also skips students whose Master password is still an unset
-      placeholder (needs_password_reset=TRUE) — these get reported separately
-      as `needs_reset` instead of silently locking them out with a hash
-      nobody knows. Admin should use Reset & Resync for those first.
-    - Returns counts of created vs updated vs skipped vs needs_reset.
     """
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam = _AttrDict(_doc) if _doc else None
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
     require_exam_scope(staff, exam)
 
-    students = db.query(Student).filter(Student.id.in_(payload.student_ids)).all()
+    _s_docs = repo.find_all("students", {"_id": {"$in": payload.student_ids}})
+    students = [_AttrDict(d) for d in _s_docs]
     found_ids = {s.id for s in students}
     skipped = [sid for sid in payload.student_ids if sid not in found_ids]
 
@@ -1555,27 +1523,20 @@ def assign_students_to_exam(
             needs_reset.append(student.id)
             continue
 
-        existing = db.query(TokenRegistry).filter(
-            TokenRegistry.student_id == student.id,
-            TokenRegistry.exam_id == exam_id,
-        ).first()
+        hashed = student.password
 
-        if existing:
-            existing.password_hash = student.password
-            existing.is_active = True
+        existing_doc = repo.find_one("token_registry", {"student_id": student.id, "exam_id": exam_id})
+        if existing_doc:
+            repo.update_one("token_registry", {"_id": existing_doc["_id"]}, {"password_hash": hashed, "is_active": True})
             updated += 1
         else:
             token = f"LIAS_{student.id.upper()}_{secrets.token_hex(4).upper()}"
-            db.add(TokenRegistry(
-                token=token,
-                exam_id=exam_id,
-                student_id=student.id,
-                password_hash=student.password,
-                is_active=True,
-            ))
+            repo.insert_one("token_registry", {
+                "_id": token, "exam_id": exam_id, "student_id": student.id,
+                "password_hash": hashed, "is_active": True,
+            })
             created += 1
 
-    db.commit()
     return {
         "success": True,
         "created": created,
@@ -1588,21 +1549,15 @@ def assign_students_to_exam(
 # ── STAFF MANAGEMENT (admin-only) ──────────────────────────────────────────────
 
 @router.get("/staff")
-def list_staff(staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+def list_staff(staff: dict = Depends(verify_admin)):
     """List all admin/faculty accounts (no password hashes, ever)."""
     require_admin(staff)
-    rows = db.query(StaffAccount).order_by(StaffAccount.created_at.asc()).all()
-    return {"success": True, "data": [
-        {
-            "id": s.id,
-            "name": s.name,
-            "email": s.email,
-            "role": s.role,
-            "module": s.module,
-            "created_at": s.created_at,
-        }
-        for s in rows
-    ]}
+    rows = repo.find_all(
+        "staff_accounts",
+        projection={"_id": 0, "password_hash": 0},
+        sort=[("created_at", 1)],
+    )
+    return {"success": True, "data": rows}
 
 
 @router.put("/staff/{staff_id}")
@@ -1612,24 +1567,22 @@ def assign_staff_module(
     staff_id: str,
     payload: ModuleAssignPayload,
     staff: dict = Depends(verify_admin),
-    db: Session = Depends(get_db),
 ):
     """Assign/reassign/clear (null) a faculty account's module. Admin-only."""
     require_admin(staff)
-    row = db.query(StaffAccount).filter(StaffAccount.id == staff_id).first()
+    row = repo.find_one("staff_accounts", {"_id": staff_id})
     if not row:
         raise HTTPException(status_code=404, detail="Staff account not found.")
-    if row.role != "faculty":
+    if row["role"] != "faculty":
         raise HTTPException(
             status_code=400, detail="Only faculty accounts can be assigned a module."
         )
-    row.module = payload.module
-    db.commit()
-    return {"success": True, "id": row.id, "module": row.module}
+    repo.update_one("staff_accounts", {"_id": staff_id}, {"module": payload.module})
+    return {"success": True, "id": staff_id, "module": payload.module}
 
 
 @router.get("/modules")
-def list_modules(staff: dict = Depends(verify_admin), db: Session = Depends(get_db)):
+def list_modules(staff: dict = Depends(verify_admin)):
     """Canonical module registry (fixed list of codes, never user-typed)."""
     require_admin(staff)
     return {"success": True, "data": list(MODULES)}

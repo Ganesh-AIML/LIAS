@@ -3,6 +3,9 @@
 import json
 import time
 
+from app.database import get_mongo_db
+from app import repositories as repo
+
 
 def _exam(db, eid, module=None, title=None):
     from app.models import Exam
@@ -17,6 +20,7 @@ def _exam(db, eid, module=None, title=None):
     )
     db.add(exam)
     db.commit()
+    get_mongo_db()["exams"].insert_one(dict(repo.doc_for("exams", exam)))
     return exam
 
 
@@ -32,6 +36,7 @@ def _session(db, sid, exam_id, submitted=True):
     )
     db.add(session)
     db.commit()
+    get_mongo_db()["exam_sessions"].insert_one(dict(repo.doc_for("exam_sessions", session)))
     return session
 
 
@@ -46,6 +51,9 @@ def _token(db, token, exam_id, student_id="23-TEST-01"):
     )
     db.add(row)
     db.commit()
+    _doc = dict(repo.doc_for("token_registry", row))
+    _doc["_id"] = token
+    get_mongo_db()["token_registry"].insert_one(_doc)
     return row
 
 
@@ -382,15 +390,20 @@ class TestSessionScoping:
 
     def test_faculty_can_revoke_own_module_session(self, client, db, faculty_bearer_headers):
         _exam(db, "exam_aiml", module="MAS701")
-        s = _session(db, "sess_aiml_1", "exam_aiml")
+        _session(db, "sess_aiml_1", "exam_aiml")
         response = client.post(
             "/admin/sessions/revoke",
             json={"session_id": "sess_aiml_1"},
             headers=faculty_bearer_headers,
         )
         assert response.status_code == 200
-        db.refresh(s)
-        assert s.is_revoked is True
+        if repo.enabled():
+            _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_1"})
+            assert _doc["is_revoked"] is True
+        else:
+            from app.models import ExamSession
+            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_1").first()
+            assert s.is_revoked is True
 
     def test_faculty_cannot_grant_cross_module_session(self, client, db, faculty_bearer_headers):
         _exam(db, "exam_cs", module="MAS702")
@@ -404,17 +417,27 @@ class TestSessionScoping:
 
     def test_faculty_can_grant_own_module_session(self, client, db, faculty_bearer_headers):
         _exam(db, "exam_aiml", module="MAS701")
-        s = _session(db, "sess_aiml_2", "exam_aiml", submitted=False)
-        s.is_revoked = True
-        db.commit()
+        _session(db, "sess_aiml_2", "exam_aiml", submitted=False)
+        if repo.enabled():
+            get_mongo_db()["exam_sessions"].update_one({"_id": "sess_aiml_2"}, {"$set": {"is_revoked": True}})
+        else:
+            from app.models import ExamSession
+            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_2").first()
+            s.is_revoked = True
+            db.commit()
         response = client.post(
             "/admin/sessions/grant",
             json={"session_id": "sess_aiml_2"},
             headers=faculty_bearer_headers,
         )
         assert response.status_code == 200
-        db.refresh(s)
-        assert s.is_revoked is False
+        if repo.enabled():
+            _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_aiml_2"})
+            assert _doc["is_revoked"] is False
+        else:
+            from app.models import ExamSession
+            s = db.query(ExamSession).filter(ExamSession.id == "sess_aiml_2").first()
+            assert s.is_revoked is False
 
 
 # ── EVALUATION SCOPING ─────────────────────────────────────────────────────────
@@ -497,8 +520,12 @@ class TestStaffManagement:
             headers=admin_bearer_headers,
         )
         assert response.status_code == 200
-        db.refresh(faculty_staff)
-        assert faculty_staff.module == "MAS702"
+        if repo.enabled():
+            _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
+            assert _doc["module"] == "MAS702"
+        else:
+            db.refresh(faculty_staff)
+            assert faculty_staff.module == "MAS702"
 
     def test_admin_clears_faculty_module(self, client, db, admin_bearer_headers, faculty_staff):
         response = client.put(
@@ -507,8 +534,12 @@ class TestStaffManagement:
             headers=admin_bearer_headers,
         )
         assert response.status_code == 200
-        db.refresh(faculty_staff)
-        assert faculty_staff.module is None
+        if repo.enabled():
+            _doc = get_mongo_db()["staff_accounts"].find_one({"_id": "staff_faculty_test"})
+            assert _doc["module"] is None
+        else:
+            db.refresh(faculty_staff)
+            assert faculty_staff.module is None
 
     def test_cannot_assign_module_to_admin(self, client, admin_bearer_headers, admin_staff):
         response = client.put(

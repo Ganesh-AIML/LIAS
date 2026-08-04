@@ -6,6 +6,11 @@ import jwt
 import bcrypt
 
 from app.models import StaffAccount
+from app.database import get_mongo_db
+
+
+def get_mongo_staff(email: str):
+    return get_mongo_db()["staff_accounts"].find_one({"email": email})
 
 
 # ── ADMIN LOGIN ────────────────────────────────────────────────────────────────
@@ -105,12 +110,12 @@ class TestFacultyRegister:
         # No auto-login token is issued
         assert "token" not in response.json()
 
-        row = db.query(StaffAccount).filter(StaffAccount.email == "new@test.local").first()
+        row = get_mongo_staff("new@test.local")
         assert row is not None
-        assert row.role == "faculty"
-        assert row.module is None  # pending until an admin assigns a module
-        assert row.password_hash != "pass1234"
-        assert bcrypt.checkpw(b"pass1234", row.password_hash.encode("utf-8"))
+        assert row["role"] == "faculty"
+        assert row["module"] is None  # pending until an admin assigns a module
+        assert row["password_hash"] != "pass1234"
+        assert bcrypt.checkpw(b"pass1234", row["password_hash"].encode("utf-8"))
 
     def test_register_ignores_module_field(self, client, db):
         # The module field is NOT accepted at registration — it must be ignored.
@@ -124,8 +129,8 @@ class TestFacultyRegister:
             },
         )
         assert response.status_code == 200
-        row = db.query(StaffAccount).filter(StaffAccount.email == "sneaky@test.local").first()
-        assert row.module is None
+        row = get_mongo_staff("sneaky@test.local")
+        assert row["module"] is None
 
     def test_register_duplicate_email(self, client, faculty_staff):
         response = client.post(
@@ -215,40 +220,38 @@ class TestTokenBehaviour:
 class TestAdminSeeding:
     def test_seed_creates_admin_from_env(self, monkeypatch):
         from app.main import _seed_admin_if_needed
-        from app.database import SessionLocal
 
         monkeypatch.setenv("ADMIN_EMAIL", "seeded@test.local")
         monkeypatch.setenv("ADMIN_PASSWORD", "seedpass123")
         _seed_admin_if_needed()
 
-        with SessionLocal() as db:
-            row = db.query(StaffAccount).filter(StaffAccount.email == "seeded@test.local").first()
-            assert row is not None
-            assert row.role == "admin"
-            assert row.module is None
-            assert bcrypt.checkpw(b"seedpass123", row.password_hash.encode("utf-8"))
+        mdb = get_mongo_db()
+        row = mdb["staff_accounts"].find_one({"email": "seeded@test.local"})
+        assert row is not None
+        assert row["role"] == "admin"
+        assert row["module"] is None
+        assert bcrypt.checkpw(b"seedpass123", row["password_hash"].encode("utf-8"))
 
     def test_seed_skipped_when_admin_exists(self, monkeypatch, db, admin_staff):
         from app.main import _seed_admin_if_needed
-        from app.database import SessionLocal
 
         monkeypatch.setenv("ADMIN_EMAIL", "another@test.local")
         monkeypatch.setenv("ADMIN_PASSWORD", "seedpass123")
         _seed_admin_if_needed()
 
-        with SessionLocal() as db2:
-            rows = db2.query(StaffAccount).filter(StaffAccount.role == "admin").all()
-            assert len(rows) == 1
-            assert rows[0].email == "admin@test.local"
+        mdb = get_mongo_db()
+        count = mdb["staff_accounts"].count_documents({"role": "admin"})
+        assert count == 1
+        admin = mdb["staff_accounts"].find_one({"role": "admin"})
+        assert admin["email"] == "admin@test.local"
 
     def test_seed_skipped_without_env(self, monkeypatch):
         from app.main import _seed_admin_if_needed
-        from app.database import SessionLocal
 
         monkeypatch.delenv("ADMIN_EMAIL", raising=False)
         monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
         _seed_admin_if_needed()
 
-        with SessionLocal() as db:
-            rows = db.query(StaffAccount).filter(StaffAccount.role == "admin").all()
-            assert rows == []
+        mdb = get_mongo_db()
+        rows = list(mdb["staff_accounts"].find({"role": "admin"}))
+        assert rows == []

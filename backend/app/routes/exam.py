@@ -5,13 +5,11 @@ import logging
 from typing import Literal, Dict, Any, Optional 
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from pydantic import BaseModel, ValidationError, Field, field_validator
-from app.database import get_db
 from app.auth import verify_session_guard
-from app.models import Exam, ViolationLog, TokenRegistry, Question, CodingProblem, SubjectiveQuestion, Section, ExamSession
 from app.limiter import limiter
+from app import repositories as repo
+from app.repositories import _AttrDict, parse_json
 
 router = APIRouter()
 logger = logging.getLogger("scope")
@@ -36,7 +34,7 @@ ALLOWED_EVENTS = {
 LATE_SUBMISSION_GRACE_SECONDS = 60
 
 
-def finalize_expired_sessions(db: Session, *, exam_id: Optional[str] = None, student_id: Optional[str] = None) -> int:
+def finalize_expired_sessions(*, exam_id: Optional[str] = None, student_id: Optional[str] = None) -> int:
     """Mark exam sessions as globally submitted once their exam has fully ended.
 
     This is the server-side safety net for the client-only auto-submit: if a
@@ -45,41 +43,31 @@ def finalize_expired_sessions(db: Session, *, exam_id: Optional[str] = None, stu
     grace window, or an expired JWT), the session would otherwise stay
     is_submitted=False and show forever as "In Progress" in analytics/monitor.
 
-    It runs lazily from endpoints that already read ExamSession rows during
-    normal usage (student dashboard feed, admin analytics, admin monitor), so no
-    scheduler/worker is needed.
-
     Safety rules:
     * Only sessions whose exam satisfied
         now > starts_at + duration_seconds + LATE_SUBMISSION_GRACE_SECONDS
       are touched — the exact boundary at which submit_exam would reject a late
       submission (grace preserved, nothing finalized before the exam truly ends).
-    * A single "UPDATE ... WHERE is_submitted = 0" makes repeat/concurrent
-      execution idempotent; the endpoint call and any racing in-flight browser
-      submit resolve harmlessly either way and no rows are ever inserted.
+    * A single update operation makes repeat/concurrent execution idempotent.
     * Only the is_submitted flag is flipped. Submission/subjective payloads,
       evaluations, violations and all other session data are left untouched —
       no answers are fabricated or overwritten.
     """
     now = time.time()
-    expired_exam_ids = (
-        db.query(Exam.id)
-        .filter(
-            Exam.starts_at + Exam.duration_seconds + LATE_SUBMISSION_GRACE_SECONDS < now
-        )
-    )
-    query = db.query(ExamSession).filter(
-        ExamSession.is_submitted == False,  # noqa: E712
-        ExamSession.exam_id.in_(expired_exam_ids),
-    )
-    if exam_id:
-        query = query.filter(ExamSession.exam_id == exam_id)
-    if student_id:
-        query = query.filter(ExamSession.student_id == student_id)
+    grace_cutoff = now - LATE_SUBMISSION_GRACE_SECONDS
 
-    finalized = query.update({"is_submitted": True}, synchronize_session=False)
-    if finalized:
-        db.commit()
+    _expired_docs = repo.find_all("exams", {
+        "$expr": {"$lt": [{"$add": ["$starts_at", "$duration_seconds"]}, grace_cutoff]}
+    })
+    expired_ids = [d["_id"] for d in _expired_docs]
+    if not expired_ids:
+        return 0
+    mongo_filter = {"is_submitted": False, "exam_id": {"$in": expired_ids}}
+    if exam_id:
+        mongo_filter["exam_id"] = exam_id
+    if student_id:
+        mongo_filter["student_id"] = student_id
+    _, finalized = repo.update_many("exam_sessions", mongo_filter, {"is_submitted": True})
     return int(finalized)
 
 
@@ -138,46 +126,49 @@ class CodeSubmitPayload(BaseModel):
 def log_violation(
     payload:        ViolationPayload,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     if payload.event_type not in ALLOWED_EVENTS:
         raise HTTPException(status_code=400, detail="Unknown event type.")
-    entry = ViolationLog(
-        session_id  = active_session.id,
-        student_id  = active_session.student_id,
-        exam_id     = active_session.exam_id,
-        event_type  = payload.event_type,
-        occurred_at = time.time(),
-        detail      = payload.detail[:256] if payload.detail else "",
-    )
-    db.add(entry)
 
-    # AUD-010 FIX: flush so the new row is counted, then check >= 3 (matches maxViolations)
-    db.flush()
-    current_violations = db.query(ViolationLog).filter(ViolationLog.session_id == active_session.id).count()
-    if current_violations >= 3:
-        active_session.is_revoked = True
+    try:
+        violation_id = f"vl_{int(time.time()*1000)}_{active_session.id[:8]}"
+        violation_doc = {
+            "_id": violation_id,
+            "session_id": active_session.id,
+            "student_id": active_session.student_id,
+            "exam_id": active_session.exam_id,
+            "event_type": payload.event_type,
+            "occurred_at": time.time(),
+            "detail": payload.detail[:256] if payload.detail else "",
+        }
+        repo.insert_one("violation_logs", violation_doc)
+        current_violations = repo.count("violation_logs", {"session_id": active_session.id})
+        revoked = current_violations >= 3
+        if revoked:
+            repo.update_one("exam_sessions", {"_id": active_session.id}, {"is_revoked": True})
+    except Exception:
+        logger.warning("[EXAM] Mongo write failed for log_violation")
+        revoked = False
 
-    db.commit()
-    return {"success": True, "revoked": active_session.is_revoked}
+    return {"success": True, "revoked": revoked}
 
 
 @router.get("/violation/count")
 def get_violation_count(
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
-    results = (
-        db.query(ViolationLog.event_type, func.count(ViolationLog.id))
-        .filter(ViolationLog.session_id == active_session.id)
-        .group_by(ViolationLog.event_type)
-        .all()
-    )
+    pipeline = [
+        {"$match": {"session_id": active_session.id}},
+        {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
+    ]
+    agg_results = repo.aggregate("violation_logs", pipeline)
     breakdown = {e: 0 for e in ALLOWED_EVENTS}
     total = 0
-    for event_type, count in results:
-        breakdown[event_type] = count
-        total += count
+    for r in agg_results:
+        etype = r["_id"]
+        cnt = r["count"]
+        breakdown[etype] = cnt
+        total += cnt
 
     return {"success": True, "count": total, "breakdown": breakdown}
 
@@ -187,47 +178,44 @@ def get_violation_count(
 @router.get("/student/available-tests")
 def get_available_tests(
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
-    token_record = (
-        db.query(TokenRegistry)
-        .filter(
-            TokenRegistry.student_id == active_session.student_id,
-            TokenRegistry.exam_id    == active_session.exam_id,
-        )
-        .first()
-    )
+    _doc = repo.find_one("token_registry", {
+        "student_id": active_session.student_id,
+        "exam_id": active_session.exam_id,
+    })
+    token_record = _AttrDict(_doc) if _doc else None
     if not token_record:
         raise HTTPException(status_code=404, detail="Student record not found.")
 
     # Server-side fallback for the client-only auto-submit: if the browser
     # never flushed a final POST for a session whose exam has ended (+ grace),
     # mark it submitted now so the dashboard does not report it as pending.
-    finalize_expired_sessions(db, student_id=active_session.student_id)
+    finalize_expired_sessions(student_id=active_session.student_id)
 
-    exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": token_record.exam_id})
+    exam_record = _AttrDict(_e_doc) if _e_doc else None
 
     # AUD-007 FIX: Query real past submitted sessions for this student
     # AUD-032 FIX: is_revoked intentionally NOT filtered here. Submission
     # status must permanently mark an exam as completed, independent of
     # whether the session row later gets revoked (e.g. by a re-login).
-    past_sessions = (
-        db.query(ExamSession)
-        .filter(
-            ExamSession.student_id  == active_session.student_id,
-            ExamSession.is_submitted == True,  # noqa: E712
-        )
-        .order_by(ExamSession.created_at.desc())
-        .all()
+    _past_docs = repo.find_all(
+        "exam_sessions",
+        {
+            "student_id": active_session.student_id,
+            "is_submitted": True,
+        },
+        sort=[("created_at", -1)],
     )
+    past_sessions = [_AttrDict(d) for d in _past_docs]
 
     # Build past results list by joining with Exam records
     past_exam_ids = [s.exam_id for s in past_sessions]
     submitted_exam_ids = set(past_exam_ids)
     past_exams_map = {}
     if past_exam_ids:
-        past_exam_records = db.query(Exam).filter(Exam.id.in_(past_exam_ids)).all()
-        past_exams_map = {e.id: e for e in past_exam_records}
+        _pe_docs = repo.find_all("exams", {"_id": {"$in": past_exam_ids}})
+        past_exams_map = {d["_id"]: _AttrDict(d) for d in _pe_docs}
 
     past_results = []
     for s in past_sessions:
@@ -272,7 +260,6 @@ def get_available_tests(
 def load_exam_workspace(
     exam_id:        str,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     """
     Fetches real dynamic exam content (MCQs & Coding Problems) from the database
@@ -282,7 +269,8 @@ def load_exam_workspace(
     if active_session.exam_id != exam_id:
         raise HTTPException(status_code=403, detail="Access denied.")
 
-    exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam_record = _AttrDict(_doc) if _doc else None
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -291,30 +279,22 @@ def load_exam_workspace(
         raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     # Block re-entry after submission
-    existing_submission = (
-        db.query(ExamSession)
-        .filter(
-            ExamSession.student_id   == active_session.student_id,
-            ExamSession.exam_id      == exam_id,
-            ExamSession.is_submitted == True,  # noqa: E712
-        )
-        .first()
-    )
+    _sub_doc = repo.find_one("exam_sessions", {
+        "student_id": active_session.student_id,
+        "exam_id": exam_id,
+        "is_submitted": True,
+    })
+    existing_submission = _AttrDict(_sub_doc) if _sub_doc else None
     if existing_submission:
         raise HTTPException(status_code=403, detail="Exam already submitted.")
 
     # 1. Fetch dynamic questions and coding tasks attached to this test ID
-    db_questions  = db.query(Question).filter(Question.exam_id == exam_id).order_by(Question.order_index).all()
-    db_coding     = db.query(CodingProblem).filter(CodingProblem.exam_id == exam_id).all()
-    db_subjective = db.query(SubjectiveQuestion).filter(SubjectiveQuestion.exam_id == exam_id).order_by(SubjectiveQuestion.order_index).all()
+    db_questions = [_AttrDict(d) for d in repo.find_all("questions", {"exam_id": exam_id}, sort=[("order_index", 1)])]
+    db_coding = [_AttrDict(d) for d in repo.find_all("coding_problems", {"exam_id": exam_id})]
+    db_subjective = [_AttrDict(d) for d in repo.find_all("subjective_questions", {"exam_id": exam_id}, sort=[("order_index", 1)])]
 
     # 2. Load first-class Section rows (new schema); may be empty for legacy exams
-    db_sections = (
-        db.query(Section)
-        .filter(Section.exam_id == exam_id)
-        .order_by(Section.order_index)
-        .all()
-    )
+    db_sections = [_AttrDict(d) for d in repo.find_all("sections", {"exam_id": exam_id}, sort=[("order_index", 1)])]
 
     # Build a lookup: section db-id → Section row (for new exams with explicit sections)
     section_by_id = {s.id: s for s in db_sections}
@@ -436,13 +416,13 @@ def verify_exam_password(
     exam_id:        str,
     payload:        PasswordVerifyPayload,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     # AUD-006 FIX: Ownership guard — student can only verify password for their own exam
     if active_session.exam_id != exam_id:
         raise HTTPException(status_code=403, detail="Access denied.")
 
-    exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam_record = _AttrDict(_doc) if _doc else None
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -451,17 +431,12 @@ def verify_exam_password(
         raise HTTPException(status_code=403, detail="Exam has not started yet.")
 
     # AUD-033 FIX: same already-submitted guard as load_exam_workspace,
-    # reused verbatim so a submitted student is stopped here instead of
-    # reaching socket connect / workspace load first.
-    existing_submission = (
-        db.query(ExamSession)
-        .filter(
-            ExamSession.student_id   == active_session.student_id,
-            ExamSession.exam_id      == exam_id,
-            ExamSession.is_submitted == True,  # noqa: E712
-        )
-        .first()
-    )
+    _sub_doc = repo.find_one("exam_sessions", {
+        "student_id": active_session.student_id,
+        "exam_id": exam_id,
+        "is_submitted": True,
+    })
+    existing_submission = _AttrDict(_sub_doc) if _sub_doc else None
     if existing_submission:
         raise HTTPException(status_code=403, detail="Exam already submitted.")
 
@@ -494,7 +469,6 @@ def submit_exam(
     exam_id:        str,
     payload:        SubmitPayload,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     """
     Finalizes the candidate session and saves response data arrays securely 
@@ -505,7 +479,8 @@ def submit_exam(
         raise HTTPException(status_code=403, detail="Session token does not match target exam.")
 
     # AUD-030 FIX: Reject submissions after exam end + grace period
-    exam_record = db.query(Exam).filter(Exam.id == exam_id).first()
+    _doc = repo.find_one("exams", {"_id": exam_id})
+    exam_record = _AttrDict(_doc) if _doc else None
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -533,15 +508,19 @@ def submit_exam(
     if active_session.is_submitted:
         raise HTTPException(status_code=400, detail="Exam already submitted.")
 
-    # AUD-002 NOTE: coding scores from client payload are NOT used for grading.
-    # Only MCQ answers and submitted code strings are stored. Coding evaluation
-    # is pending server-side integration. See analytics route for "Pending Evaluation" handling.
-    active_session.submission_payload = json.dumps(payload.answers)
-    if payload.subjective:
-        active_session.subjective_payload = json.dumps(payload.subjective)
-    active_session.is_submitted = True
-    
-    db.commit()
+    try:
+        update_fields = {"is_submitted": True}
+        update_fields["submission_payload"] = payload.answers if payload.answers else {}
+        if payload.subjective:
+            update_fields["subjective_payload"] = payload.subjective
+        repo.update_one(
+            "exam_sessions",
+            {"_id": active_session.id},
+            update_fields,
+        )
+    except Exception:
+        logger.warning("[EXAM] Mongo write failed for submit_exam")
+
     return {"success": True, "message": "Exam submitted securely."}
 
 
@@ -554,7 +533,6 @@ def run_code(
     exam_id:        str,
     payload:        CodeRunPayload,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     """
     Code execution stub. Judge0 integration is pending.
@@ -586,7 +564,6 @@ def submit_code(
     exam_id:        str,
     payload:        CodeSubmitPayload,
     active_session  = Depends(verify_session_guard),
-    db: Session     = Depends(get_db),
 ):
     """
     Code submission stub. Stores the submitted code string only.

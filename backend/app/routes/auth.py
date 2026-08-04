@@ -4,12 +4,11 @@ import logging
 from secrets import token_hex
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
-from sqlalchemy.orm import Session
 import bcrypt
-from app.database import get_db
-from app.models import TokenRegistry, ExamSession, Student, Exam
 from app.auth import create_session_jwt, verify_session_guard
 from app.limiter import limiter
+from app import repositories as repo
+from app.repositories import _AttrDict
 import time
 
 router = APIRouter()
@@ -68,16 +67,13 @@ def network_telemetry_ping():
 
 @router.post("/join")
 @limiter.limit("5/minute")  # Issue 2: brute-force protection
-def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Depends(get_db)):
-    token_record = (
-        db.query(TokenRegistry)
-        .filter(
-            TokenRegistry.token      == payload.exam_token,
-            TokenRegistry.student_id == payload.student_id,
-            TokenRegistry.is_active  == True,  # noqa: E712
-        )
-        .first()
-    )
+def join_exam_pipeline(request: Request, payload: JoinPayload):
+    _doc = repo.find_one("token_registry", {
+        "token": payload.exam_token,
+        "student_id": payload.student_id,
+        "is_active": True,
+    })
+    token_record = _AttrDict(_doc) if _doc else None
 
     # Always run bcrypt even on miss to prevent timing-based user enumeration
     dummy_hash  = "$2b$12$KIXkJ1yGbRPGSmPPmoBvOuoO3a8EJHxRPbPCw/dqxRdAb9RXq9z7i"
@@ -96,7 +92,8 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
     # AUD-018: TokenRegistry.is_active only governs this exam's token. The
     # master directory's Student.is_active flag must also be honored — an
     # admin deactivating a student there should block login everywhere.
-    master_student = db.query(Student).filter(Student.id == payload.student_id).first()
+    _s_doc = repo.find_one("students", {"_id": payload.student_id})
+    master_student = _AttrDict(_s_doc) if _s_doc else None
     if master_student and not master_student.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -107,7 +104,8 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
     # ends. Without this, a student can keep logging in indefinitely with
     # the same token+password long after the exam is over.
     EXAM_GRACE_SECONDS = 300
-    exam_record = db.query(Exam).filter(Exam.id == token_record.exam_id).first()
+    _e_doc = repo.find_one("exams", {"_id": token_record.exam_id})
+    exam_record = _AttrDict(_e_doc) if _e_doc else None
     grace_remaining = None
     if exam_record:
         grace_deadline = exam_record.starts_at + exam_record.duration_seconds + EXAM_GRACE_SECONDS
@@ -118,34 +116,29 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
             )
         grace_remaining = grace_deadline - time.time()
 
-    # Atomic session replacement — revoke old, create new in one transaction
+    # Atomic session replacement — revoke old, create new
     try:
-        existing_session = (
-            db.query(ExamSession)
-            .filter(
-                ExamSession.student_id == payload.student_id,
-                ExamSession.exam_id    == token_record.exam_id,
-                ExamSession.is_revoked == False,  # noqa: E712
-            )
-            .with_for_update()
-            .first()
-        )
-        if existing_session:
-            existing_session.is_revoked = True
-
         session_uuid       = f"sess_{uuid.uuid4().hex[:12]}"
         secret_key_entropy = token_hex(32)
 
-        new_session = ExamSession(
-            id             = session_uuid,
-            student_id     = payload.student_id,
-            exam_id        = token_record.exam_id,
-            session_secret = secret_key_entropy,
+        # Atomic revoke: single Mongo operation prevents double-login race
+        repo.find_one_and_update(
+            "exam_sessions",
+            {"student_id": payload.student_id, "exam_id": token_record.exam_id, "is_revoked": False},
+            {"$set": {"is_revoked": True}},
         )
-        db.add(new_session)
-        db.commit()
+        new_session_doc = {
+            "_id":            session_uuid,
+            "student_id":     payload.student_id,
+            "exam_id":        token_record.exam_id,
+            "session_secret": secret_key_entropy,
+            "is_submitted":   False,
+            "is_revoked":     False,
+            "created_at":     time.time(),
+        }
+        repo.insert_one("exam_sessions", new_session_doc)
+
     except Exception:
-        db.rollback()
         logger.error("Session creation failed.")
         raise HTTPException(status_code=500, detail="Session error. Please retry.")
 
@@ -168,10 +161,11 @@ def join_exam_pipeline(request: Request, payload: JoinPayload, db: Session = Dep
 @router.post("/logout")
 def logout_session(
     active_session=Depends(verify_session_guard),
-    db: Session = Depends(get_db),
 ):
-    active_session.is_revoked = True
-    db.commit()
+    try:
+        repo.update_one("exam_sessions", {"_id": active_session.id}, {"is_revoked": True})
+    except Exception:
+        logger.warning("[AUTH] Mongo write failed for logout_session")
     return {"success": True}
 
 
@@ -180,7 +174,6 @@ def logout_session(
 def refresh_token(
     request: Request,
     active_session=Depends(verify_session_guard),
-    db: Session = Depends(get_db),
 ):
     """
     AUD-053: the original JWT exp is fixed at login time from the exam's
@@ -194,7 +187,8 @@ def refresh_token(
     Requires a currently-valid (not expired, not revoked) token — renewal,
     not a bypass of expiry/revocation.
     """
-    exam_record = db.query(Exam).filter(Exam.id == active_session.exam_id).first()
+    _doc = repo.find_one("exams", {"_id": active_session.exam_id})
+    exam_record = _AttrDict(_doc) if _doc else None
     if not exam_record:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
@@ -217,18 +211,14 @@ def update_password(
     request: Request,
     payload: UpdatePasswordPayload,
     active_session=Depends(verify_session_guard),
-    db: Session = Depends(get_db),
 ):
     """Issue 11: This route was called from the frontend but never existed in the backend."""
-    token_record = (
-        db.query(TokenRegistry)
-        .filter(
-            TokenRegistry.student_id == active_session.student_id,
-            TokenRegistry.exam_id    == active_session.exam_id,
-            TokenRegistry.is_active  == True,  # noqa: E712
-        )
-        .first()
-    )
+    _doc = repo.find_one("token_registry", {
+        "student_id": active_session.student_id,
+        "exam_id": active_session.exam_id,
+        "is_active": True,
+    })
+    token_record = _AttrDict(_doc) if _doc else None
     if not token_record:
         raise HTTPException(status_code=404, detail="Student token not found.")
 
@@ -238,8 +228,15 @@ def update_password(
     ):
         raise HTTPException(status_code=401, detail="Current password is incorrect.")
 
-    token_record.password_hash = bcrypt.hashpw(
+    new_hash = bcrypt.hashpw(
         payload.newPassword.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
-    db.commit()
+    try:
+        repo.update_one(
+            "token_registry",
+            {"_id": token_record.token},
+            {"password_hash": new_hash},
+        )
+    except Exception:
+        logger.warning("[AUTH] Mongo write failed for update_password")
     return {"success": True, "detail": "Password updated successfully."}

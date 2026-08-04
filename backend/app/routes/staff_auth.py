@@ -6,9 +6,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import StaffAccount
+from app import repositories as repo
 from app.auth import create_staff_jwt
 from app.limiter import limiter
 from app.module_codes import MODULE_CODES
@@ -80,16 +78,16 @@ class ModuleAssignPayload(BaseModel):
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
 
-def _staff_response(staff: StaffAccount) -> dict:
+def _staff_response(staff: dict) -> dict:
     return {
         "success": True,
-        "token": create_staff_jwt(staff.id),
+        "token": create_staff_jwt(staff["id"]),
         "staff": {
-            "id": staff.id,
-            "name": staff.name,
-            "email": staff.email,
-            "role": staff.role,
-            "module": staff.module,
+            "id": staff["id"],
+            "name": staff.get("name"),
+            "email": staff["email"],
+            "role": staff["role"],
+            "module": staff.get("module"),
         },
     }
 
@@ -99,62 +97,59 @@ def _generic_401() -> None:
     raise HTTPException(status_code=401, detail="Invalid email or password.")
 
 
-def _find_by_email(db: Session, email: str) -> Optional[StaffAccount]:
-    return (
-        db.query(StaffAccount)
-        .filter(StaffAccount.email == email.strip().lower())
-        .first()
-    )
+def _find_by_email(email: str) -> Optional[dict]:
+    return repo.col("staff_accounts").find_one({"email": email.strip().lower()})
 
 
 # ── AUTH ENDPOINTS (mounted at /admin/auth/*) ───────────────────────────────
 
 @router.post("/auth/login")
 @limiter.limit("10/minute")
-def staff_login(request: Request, payload: StaffLoginPayload, db: Session = Depends(get_db)):
+def staff_login(request: Request, payload: StaffLoginPayload):
     """Login for ADMIN accounts (role='admin')."""
-    staff = _find_by_email(db, payload.email)
-    if not staff or not bcrypt.checkpw(payload.password.encode("utf-8"), staff.password_hash.encode("utf-8")):
+    staff = _find_by_email(payload.email)
+    if not staff or not bcrypt.checkpw(payload.password.encode("utf-8"), staff["password_hash"].encode("utf-8")):
         _generic_401()
-    if staff.role != "admin":
+    if staff["role"] != "admin":
         _generic_401()
     return _staff_response(staff)
 
 
 @router.post("/auth/faculty-login")
 @limiter.limit("10/minute")
-def faculty_login(request: Request, payload: StaffLoginPayload, db: Session = Depends(get_db)):
+def faculty_login(request: Request, payload: StaffLoginPayload):
     """Login for FACULTY accounts (role='faculty')."""
-    staff = _find_by_email(db, payload.email)
-    if not staff or not bcrypt.checkpw(payload.password.encode("utf-8"), staff.password_hash.encode("utf-8")):
+    staff = _find_by_email(payload.email)
+    if not staff or not bcrypt.checkpw(payload.password.encode("utf-8"), staff["password_hash"].encode("utf-8")):
         _generic_401()
-    if staff.role != "faculty":
+    if staff["role"] != "faculty":
         _generic_401()
     return _staff_response(staff)
 
 
 @router.post("/auth/register")
 @limiter.limit("10/minute")
-def faculty_register(request: Request, payload: StaffRegisterPayload, db: Session = Depends(get_db)):
+def faculty_register(request: Request, payload: StaffRegisterPayload):
     """Public self-registration for faculty.
 
     Deliberately does NOT accept a module — faculty accounts are created in the
     pending state (module=NULL) and an admin assigns the module later.
     """
-    if _find_by_email(db, payload.email):
+    if _find_by_email(payload.email):
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     password_hash = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-    staff = StaffAccount(
-        id=f"staff_{uuid.uuid4().hex[:8]}",
-        name=payload.name,
-        email=payload.email.strip().lower(),
-        password_hash=password_hash,
-        role="faculty",
-        module=None,
-        created_at=time.time(),
-    )
-    db.add(staff)
-    db.commit()
+    staff_id = f"staff_{uuid.uuid4().hex[:8]}"
+    doc = {
+        "_id": staff_id,
+        "id": staff_id,
+        "name": payload.name,
+        "email": payload.email.strip().lower(),
+        "password_hash": password_hash,
+        "role": "faculty",
+        "module": None,
+        "created_at": time.time(),
+    }
+    repo.col("staff_accounts").insert_one(doc)
     # No auto-login: faculty must sign in through the faculty login flow.
     return {"success": True, "message": "Account created. Please log in."}

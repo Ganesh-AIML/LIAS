@@ -4,9 +4,8 @@ import jwt
 import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import ExamSession
+from app import repositories as repo
+from app.repositories import _AttrDict
 
 logger = logging.getLogger("scope")
 
@@ -58,7 +57,6 @@ def decode_staff_jwt(token: str):
 
 def verify_session_guard(
     credentials: HTTPAuthorizationCredentials = Depends(security_agent),
-    db: Session = Depends(get_db),
 ):
     try:
         payload = jwt.decode(
@@ -73,9 +71,9 @@ def verify_session_guard(
                 detail="Malformed token payload.",
             )
 
-        session_record = (
-            db.query(ExamSession).filter(ExamSession.id == session_id).first()
-        )
+        _doc = repo.find_one("exam_sessions", {"_id": session_id})
+        session_record = _AttrDict(_doc) if _doc else None
+
         if not session_record or session_record.is_revoked:
             # AUD-011: revoked/invalid session is distinct from a bad token.
             # Use 401 + a machine-readable code so the frontend interceptor can
@@ -118,14 +116,8 @@ def verify_socket_token(token: str, exam_id: str):
     except jwt.PyJWTError:
         return None
 
-    from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        session = db.query(ExamSession).filter(
-            ExamSession.id == session_id,
-            ExamSession.exam_id == exam_id,
-            ExamSession.is_revoked == False,
-        ).first()
-        return session
-    finally:
-        db.close()
+    _doc = repo.find_one(
+        "exam_sessions",
+        {"_id": session_id, "exam_id": exam_id, "is_revoked": False},
+    )
+    return _AttrDict(_doc) if _doc else None

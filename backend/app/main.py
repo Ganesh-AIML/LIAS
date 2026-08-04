@@ -10,9 +10,9 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.limiter import limiter
 from contextlib import asynccontextmanager
-from sqlalchemy import text
-from app.database import engine, Base, SessionLocal
-from app.models import Exam, TokenRegistry, ExamSession, ViolationLog, Question, CodingProblem, TestCase, SubjectiveQuestion, Student
+from app.database import get_mongo_db
+from app.mongo_indexes import ensure_mongo_indexes
+from app import repositories as repo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scope")
@@ -20,35 +20,13 @@ logger = logging.getLogger("scope")
 
 @asynccontextmanager
 async def lifespan(app):
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
+    mdb = get_mongo_db()
+    if mdb is not None:
+        # Idempotent: safe on every boot; creates missing unique/lookup indexes.
         try:
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS submission_payload TEXT;"))
-            db.execute(text("ALTER TABLE token_registry ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_secret VARCHAR;"))
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_secret VARCHAR;"))
-            db.execute(text("""
-                CREATE TABLE IF NOT EXISTS sections (
-                    id VARCHAR PRIMARY KEY,
-                    exam_id VARCHAR NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
-                    name VARCHAR NOT NULL,
-                    type VARCHAR NOT NULL DEFAULT 'mcq',
-                    marks_per_question INTEGER DEFAULT 1,
-                    order_index INTEGER DEFAULT 0
-                );
-            """))
-            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS section_id VARCHAR;"))
-            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0;"))
-            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS marks INTEGER DEFAULT 1;"))
-            db.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS content_format VARCHAR DEFAULT 'plain';"))
-            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS section_id VARCHAR;"))
-            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS order_index INTEGER DEFAULT 0;"))
-            db.execute(text("ALTER TABLE subjective_questions ADD COLUMN IF NOT EXISTS content_format VARCHAR DEFAULT 'plain';"))
-            db.commit()
-        except Exception:
-            db.rollback()
-    _run_additive_migrations()
+            ensure_mongo_indexes(mdb)
+        except Exception as e:
+            logger.warning("Mongo index initialization skipped: %s", e)
     _seed_admin_if_needed()
     yield
 
@@ -83,192 +61,29 @@ def _seed_admin_if_needed():
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     if not admin_email or not admin_password:
         return
-    with SessionLocal() as db:
-        try:
-            existing = db.execute(
-                text("SELECT COUNT(*) FROM staff_accounts WHERE role = 'admin'")
-            ).scalar()
-            if existing and int(existing) > 0:
-                return
-            import bcrypt as _bcrypt
-            password_hash = _bcrypt.hashpw(
-                admin_password.encode("utf-8"), _bcrypt.gensalt(rounds=12)
-            ).decode("utf-8")
-            db.execute(
-                text("""
-                    INSERT INTO staff_accounts (id, name, email, password_hash, role, module, created_at)
-                    VALUES (:id, NULL, :email, :hash, 'admin', NULL, :ts)
-                """),
-                {
-                    "id": f"staff_{uuid.uuid4().hex[:8]}",
-                    "email": admin_email,
-                    "hash": password_hash,
-                    "ts": time.time(),
-                },
-            )
-            db.commit()
-            logger.info("✅ Seeded admin account for %s", admin_email)
-        except Exception as e:
-            db.rollback()
-            logger.warning("Admin seed skipped: %s", e)
+    mdb = get_mongo_db()
+    if mdb is None:
+        return
+    existing = repo.col("staff_accounts").count_documents({"role": "admin"})
+    if existing and int(existing) > 0:
+        return
+    import bcrypt as _bcrypt
+    password_hash = _bcrypt.hashpw(
+        admin_password.encode("utf-8"), _bcrypt.gensalt(rounds=12)
+    ).decode("utf-8")
+    staff_id = f"staff_{uuid.uuid4().hex[:8]}"
+    created_at = time.time()
+    mdb["staff_accounts"].insert_one({
+        "_id": staff_id,
+        "id": staff_id,
+        "email": admin_email,
+        "password_hash": password_hash,
+        "role": "admin",
+        "module": None,
+        "created_at": created_at,
+    })
+    logger.info("Seeded admin account for %s", admin_email)
 
-def _run_additive_migrations():
-    with SessionLocal() as db:
-        from sqlalchemy import text
-        try:
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS subjective_payload TEXT;"))
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.warning("Migration skipped: %s", e)
-
-        try:
-            # AUD-022: coding_duration_minutes was hardcoded to 60 server-side
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS coding_duration_minutes INTEGER DEFAULT NULL;"))
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS mcq_duration_minutes INTEGER DEFAULT NULL;"))
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS qna_duration_minutes INTEGER DEFAULT NULL;"))
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.warning("Migration skipped: %s", e)
-
-        # ── MASTER DIRECTORY: create students table if it doesn't exist ──
-        try:
-            db.execute(text("""
-                CREATE TABLE IF NOT EXISTS students (
-                    id         VARCHAR PRIMARY KEY,
-                    name       VARCHAR,
-                    password   VARCHAR NOT NULL DEFAULT '',
-                    is_active  BOOLEAN DEFAULT TRUE,
-                    created_at FLOAT DEFAULT EXTRACT(EPOCH FROM NOW())
-                );
-            """))
-            db.commit()
-            logger.info("✅ students table ready.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("students table migration skipped: %s", e)
-
-        # AUD-025: flag students whose `password` is a placeholder hash, not a
-        # real credential, so assign_students_to_exam can refuse to propagate
-        # it into TokenRegistry instead of silently locking students out.
-        try:
-            db.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS needs_password_reset BOOLEAN DEFAULT FALSE;"))
-            db.commit()
-            logger.info("✅ students.needs_password_reset ready.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("needs_password_reset migration skipped: %s", e)
-
-        # ── BACKFILL: seed students from existing TokenRegistry unique student_ids ──
-        # Only inserts rows that don't already exist.
-        # AUD-024: empty string is not a valid bcrypt hash and breaks downstream
-        # password comparisons (e.g. assign_students_to_exam). Use a placeholder
-        # bcrypt hash of a random, unguessable value instead — login still requires
-        # an explicit password reset via the Master Directory UI.
-        # AUD-025: mark these rows needs_password_reset=TRUE so downstream code
-        # (assign_students_to_exam) knows not to trust this hash as a real password.
-        try:
-            import bcrypt as _bcrypt
-            import secrets as _secrets
-            placeholder_hash = _bcrypt.hashpw(
-                _secrets.token_urlsafe(32).encode("utf-8"), _bcrypt.gensalt()
-            ).decode("utf-8")
-            db.execute(text("""
-                INSERT INTO students (id, name, password, is_active, created_at, needs_password_reset)
-                SELECT DISTINCT
-                    tr.student_id,
-                    NULL,
-                    :placeholder_hash,
-                    TRUE,
-                    EXTRACT(EPOCH FROM NOW()),
-                    TRUE
-                FROM token_registry tr
-                WHERE tr.student_id IS NOT NULL
-                  AND tr.student_id <> ''
-                  AND NOT EXISTS (
-                      SELECT 1 FROM students s WHERE s.id = tr.student_id
-                  );
-            """), {"placeholder_hash": placeholder_hash})
-            db.commit()
-            logger.info("✅ students backfill complete.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("students backfill skipped: %s", e)
-
-        # ── ANALYTICS EVALUATION COLUMNS (additive, backward compatible) ──
-        try:
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS mcq_score FLOAT;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS coding_evaluation TEXT;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS subjective_evaluation TEXT;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS total_score FLOAT;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS review_status VARCHAR;"))
-            db.execute(text("ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS evaluated_at FLOAT;"))
-            db.commit()
-            logger.info("✅ evaluation columns ready on exam_sessions.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("evaluation columns migration skipped: %s", e)
-
-        # ── CODING PROBLEMS MARKS COLUMN (additive, backward compatible) ──
-        try:
-            db.execute(text("ALTER TABLE coding_problems ADD COLUMN IF NOT EXISTS marks INTEGER DEFAULT 10;"))
-            db.commit()
-            logger.info("✅ coding_problems.marks column ready.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("coding_problems.marks migration skipped: %s", e)
-
-        # ── FACULTY-OWNED EVALUATIONS (additive; per-faculty manual grading) ──
-        # One row per (session, faculty). Mutable; uniqueness prevents duplicate
-        # saves. Legacy ownerless marks stay on exam_sessions (untouched).
-        try:
-            db.execute(text("""
-                CREATE TABLE IF NOT EXISTS faculty_evaluations (
-                    id VARCHAR PRIMARY KEY,
-                    session_id VARCHAR NOT NULL REFERENCES exam_sessions(id) ON DELETE CASCADE,
-                    faculty_id VARCHAR NOT NULL REFERENCES staff_accounts(id) ON DELETE SET NULL,
-                    coding_marks TEXT,
-                    subjective_marks TEXT,
-                    total_score FLOAT,
-                    review_status VARCHAR,
-                    created_at FLOAT,
-                    evaluated_at FLOAT
-                );
-            """))
-            db.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_faculty_eval_session_faculty "
-                "ON faculty_evaluations(session_id, faculty_id);"
-            ))
-            db.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_faculty_evaluations_faculty_id "
-                "ON faculty_evaluations(faculty_id);"
-            ))
-            db.commit()
-            logger.info("✅ faculty_evaluations table ready.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("faculty_evaluations migration skipped: %s", e)
-
-        # ── EXAMS MODULE COLUMN (additive; module-based authorization) ──
-        # Existing exams get module=NULL -> visible to admins only until an
-        # admin assigns the exam to a module.
-        try:
-            db.execute(text("ALTER TABLE exams ADD COLUMN IF NOT EXISTS module VARCHAR;"))
-            db.commit()
-            logger.info("✅ exams.module column ready.")
-        except Exception as e:
-            db.rollback()
-            logger.warning("exams.module migration skipped: %s", e)
-
-        # AUD-025: one-time sweep for students backfilled BEFORE this flag existed
-        # (e.g. if AUD-024 already ran on this DB in a prior deploy). Anyone who
-        # was never given a real password via the UI still has a placeholder hash
-        # but needs_password_reset would default to FALSE on their existing row.
-        # We can't distinguish "real password" from "placeholder" after the fact
-        # for those rows, so we leave them as-is — this only protects rows
-        # inserted from now on. Admins with pre-existing locked-out students
-        # should use Reset & Resync, which clears the flag explicitly anyway.
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","))
 

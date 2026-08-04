@@ -13,6 +13,7 @@ aiohttp
 PyJWT
 slowapi
 cryptography>=41.0.0
+pymongo>=4.9.0
 
 # Testing
 pytest>=8.0.0

@@ -18,6 +18,9 @@ os.environ["ADMIN_SECRET"] = "test_admin_secret_123"
 os.environ["JWT_SECRET_KEY"] = "test_jwt_secret_key_for_testing_purposes_only"
 os.environ["DB_ENCRYPTION_KEY"] = "wIAgy-gUwS1wSaQAKOeC4RcmO4zsJuPx780uRyWxMeU="
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
+# Staff auth reads from MongoDB. Tests must NEVER touch the production `lias`
+# database — divert to a dedicated test DB before importing app modules.
+os.environ["MONGO_DB_NAME"] = "lias_test"
 # Disable the admin seed in tests — the bootstrap window (X-Admin-Token) and
 # staff fixtures must control exactly which admin accounts exist.
 os.environ["ADMIN_EMAIL"] = ""
@@ -29,11 +32,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from app.database import Base, get_db
+from app.database import Base, get_db, get_mongo_db
 from app.main import fastapi_app
 from app.models import Student, TokenRegistry, Exam, ExamSession, StaffAccount
 from app.auth import create_staff_jwt
 from app.limiter import limiter
+from app import repositories as repo
+from app.mongo_indexes import ensure_mongo_indexes
 
 TEST_DATABASE_URL = f"sqlite:///{_db_path}"
 
@@ -46,6 +51,19 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.close()
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def mongo_test_db():
+    """Ensure the Mongo test collections exist and are empty for each test."""
+    mdb = get_mongo_db()
+    assert mdb.name == "lias_test", f"test suite must not use production db, got {mdb.name}"
+    ensure_mongo_indexes(mdb)
+    for name in repo.COLLECTIONS.values():
+        mdb[name].delete_many({})
+    yield
+    for name in repo.COLLECTIONS.values():
+        mdb[name].delete_many({})
 
 
 def override_get_db():
@@ -98,6 +116,8 @@ def sample_exam(db):
     )
     db.add(exam)
     db.commit()
+    mdb = get_mongo_db()
+    mdb["exams"].insert_one(dict(repo.doc_for("exams", exam)))
     return exam
 
 
@@ -111,6 +131,8 @@ def sample_student(db):
     )
     db.add(student)
     db.commit()
+    mdb = get_mongo_db()
+    mdb["students"].insert_one(dict(repo.doc_for("students", student)))
     return student
 
 
@@ -125,6 +147,8 @@ def sample_token(db, sample_exam, sample_student):
     )
     db.add(token)
     db.commit()
+    mdb = get_mongo_db()
+    mdb["token_registry"].insert_one(dict(repo.doc_for("token_registry", token)))
     return token
 
 
@@ -132,6 +156,26 @@ def sample_token(db, sample_exam, sample_student):
 
 def _staff_hash(password: str = "test1234") -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def _seed_staff(db, *, id, name, email, role, module, password="test1234"):
+    """Create a staff account in BOTH the SQLite test DB (for the still SQL-backed
+    seed path and ORM-fixture users) and the Mongo test DB (for migrated staff
+    auth routes and verify_admin). Keeps every existing assertion valid."""
+    password_hash = _staff_hash(password)
+    staff = StaffAccount(
+        id=id,
+        name=name,
+        email=email,
+        password_hash=password_hash,
+        role=role,
+        module=module,
+    )
+    db.add(staff)
+    db.commit()
+    mdb = get_mongo_db()
+    mdb["staff_accounts"].insert_one(dict(repo.doc_for("staff_accounts", staff)))
+    return staff
 
 
 @pytest.fixture
@@ -142,17 +186,14 @@ def admin_headers():
 
 @pytest.fixture
 def admin_staff(db):
-    staff = StaffAccount(
+    return _seed_staff(
+        db,
         id="staff_admin_test",
         name="Test Admin",
         email="admin@test.local",
-        password_hash=_staff_hash(),
         role="admin",
         module=None,
     )
-    db.add(staff)
-    db.commit()
-    return staff
 
 
 @pytest.fixture
@@ -162,17 +203,14 @@ def admin_bearer_headers(admin_staff):
 
 @pytest.fixture
 def faculty_staff(db):
-    staff = StaffAccount(
+    return _seed_staff(
+        db,
         id="staff_faculty_test",
         name="Test Faculty",
         email="faculty@test.local",
-        password_hash=_staff_hash(),
         role="faculty",
         module="MAS701",
     )
-    db.add(staff)
-    db.commit()
-    return staff
 
 
 @pytest.fixture
@@ -182,17 +220,14 @@ def faculty_bearer_headers(faculty_staff):
 
 @pytest.fixture
 def other_faculty_staff(db):
-    staff = StaffAccount(
+    return _seed_staff(
+        db,
         id="staff_faculty_other",
         name="Other Faculty",
         email="other@test.local",
-        password_hash=_staff_hash(),
         role="faculty",
         module="MAS702",
     )
-    db.add(staff)
-    db.commit()
-    return staff
 
 
 @pytest.fixture
@@ -202,17 +237,14 @@ def other_faculty_bearer_headers(other_faculty_staff):
 
 @pytest.fixture
 def pending_faculty_staff(db):
-    staff = StaffAccount(
+    return _seed_staff(
+        db,
         id="staff_faculty_pending",
         name="Pending Faculty",
         email="pending@test.local",
-        password_hash=_staff_hash(),
         role="faculty",
         module=None,
     )
-    db.add(staff)
-    db.commit()
-    return staff
 
 
 @pytest.fixture

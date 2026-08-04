@@ -14,6 +14,8 @@ import time
 from app.models import Exam, ExamSession, Question
 from app.routes.exam import finalize_expired_sessions, LATE_SUBMISSION_GRACE_SECONDS
 from app.auth import create_session_jwt
+from app.database import get_mongo_db
+from app import repositories as repo
 
 HASH = "$2b$12$YY/SvvxBjbVOAtDT5i1JkefkOvoxgH2aoL5kIhUf8n8.KQYzj6Ho6"
 
@@ -29,6 +31,7 @@ def _exam(db, eid, start_ago, duration_seconds, status="completed"):
     )
     db.add(exam)
     db.commit()
+    get_mongo_db()["exams"].insert_one(dict(repo.doc_for("exams", exam)))
     return exam
 
 
@@ -46,6 +49,7 @@ def _session(db, sid, exam_or_id, *, submitted=False, payload=None, subjective=N
     )
     db.add(session)
     db.commit()
+    get_mongo_db()["exam_sessions"].insert_one(dict(repo.doc_for("exam_sessions", session)))
     return session
 
 
@@ -54,38 +58,38 @@ class TestFinalizeExpired:
         exam = _exam(db, "exam_expired", start_ago=5000, duration_seconds=1000)
         _session(db, "sess_expired", exam)
 
-        n = finalize_expired_sessions(db, exam_id=exam.id)
+        n = finalize_expired_sessions(exam_id=exam.id)
         assert n == 1
-        session = db.query(ExamSession).filter(ExamSession.id == "sess_expired").first()
-        assert session.is_submitted is True
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_expired"})
+        assert _doc["is_submitted"] is True
 
     def test_active_exam_not_finalized(self, db):
         exam = _exam(db, "exam_active", start_ago=100, duration_seconds=100000, status="live")
         _session(db, "sess_active", exam)
 
-        n = finalize_expired_sessions(db, exam_id=exam.id)
+        n = finalize_expired_sessions(exam_id=exam.id)
         assert n == 0
-        session = db.query(ExamSession).filter(ExamSession.id == "sess_active").first()
-        assert session.is_submitted is False
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_active"})
+        assert _doc["is_submitted"] is False
 
     def test_expired_but_within_grace_not_finalized(self, db):
         # Exam ended 20s ago (< 60s grace) -> must NOT be finalized yet.
         exam = _exam(db, "exam_grace", start_ago=120, duration_seconds=100)
         _session(db, "sess_grace", exam)
 
-        n = finalize_expired_sessions(db, exam_id=exam.id)
+        n = finalize_expired_sessions(exam_id=exam.id)
         assert n == 0
-        session = db.query(ExamSession).filter(ExamSession.id == "sess_grace").first()
-        assert session.is_submitted is False
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_grace"})
+        assert _doc["is_submitted"] is False
 
     def test_already_submitted_not_altered(self, db):
         exam = _exam(db, "exam_done", start_ago=5000, duration_seconds=1000)
         _session(db, "sess_done", exam, submitted=True, payload={"mcqs": {"q": "A"}, "coding": {}})
 
-        n = finalize_expired_sessions(db, exam_id=exam.id)
+        n = finalize_expired_sessions(exam_id=exam.id)
         assert n == 0
-        session = db.query(ExamSession).filter(ExamSession.id == "sess_done").first()
-        assert session.is_submitted is True
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_done"})
+        assert _doc["is_submitted"] is True
 
     def test_only_expired_unsubmitted_sessions_finalized(self, db):
         exam = _exam(db, "exam_mixed", start_ago=5000, duration_seconds=1000)
@@ -94,10 +98,10 @@ class TestFinalizeExpired:
         exam_live = _exam(db, "exam_live_other", start_ago=100, duration_seconds=3600, status="live")
         _session(db, "sess_live", exam_live, submitted=True)
 
-        n = finalize_expired_sessions(db, exam_id=exam.id)
+        n = finalize_expired_sessions(exam_id=exam.id)
         assert n == 1
-        assert db.query(ExamSession).filter(ExamSession.id == "sess_finalize").first().is_submitted is True
-        assert db.query(ExamSession).filter(ExamSession.id == "sess_already").first().is_submitted is True
+        assert get_mongo_db()["exam_sessions"].find_one({"_id": "sess_finalize"})["is_submitted"] is True
+        assert get_mongo_db()["exam_sessions"].find_one({"_id": "sess_already"})["is_submitted"] is True
 
     def test_expired_session_in_other_exam_untouched(self, db):
         exam_a = _exam(db, "exam_a", start_ago=5000, duration_seconds=1000)
@@ -105,10 +109,10 @@ class TestFinalizeExpired:
         exam_b = _exam(db, "exam_b", start_ago=5000, duration_seconds=1000)
         _session(db, "sess_b", exam_b)
 
-        n = finalize_expired_sessions(db, exam_id="exam_b")
+        n = finalize_expired_sessions(exam_id="exam_b")
         assert n == 1
-        assert db.query(ExamSession).filter(ExamSession.id == "sess_a").first().is_submitted is False
-        assert db.query(ExamSession).filter(ExamSession.id == "sess_b").first().is_submitted is True
+        assert get_mongo_db()["exam_sessions"].find_one({"_id": "sess_a"})["is_submitted"] is False
+        assert get_mongo_db()["exam_sessions"].find_one({"_id": "sess_b"})["is_submitted"] is True
 
     def test_answer_data_preserved_after_finalization(self, db):
         exam = _exam(db, "exam_save", start_ago=5000, duration_seconds=1000)
@@ -116,19 +120,19 @@ class TestFinalizeExpired:
         subjective = {"sq1": "paragraph answer"}
         _session(db, "sess_save", exam, payload=payload, subjective=subjective)
 
-        finalize_expired_sessions(db, exam_id=exam.id)
-        session = db.query(ExamSession).filter(ExamSession.id == "sess_save").first()
-        assert session.is_submitted is True
-        assert json.loads(session.submission_payload) == payload
-        assert json.loads(session.subjective_payload) == subjective
+        finalize_expired_sessions(exam_id=exam.id)
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": "sess_save"})
+        assert _doc["is_submitted"] is True
+        assert _doc.get("submission_payload") == payload
+        assert _doc.get("subjective_payload") == subjective
 
     def test_idempotent_repeated_execution(self, db):
         exam = _exam(db, "exam_idem", start_ago=5000, duration_seconds=1000)
         _session(db, "sess_idem", exam)
 
-        assert finalize_expired_sessions(db, exam_id=exam.id) == 1
-        assert finalize_expired_sessions(db, exam_id=exam.id) == 0
-        assert db.query(ExamSession).filter(ExamSession.id == "sess_idem").first().is_submitted is True
+        assert finalize_expired_sessions(exam_id=exam.id) == 1
+        assert finalize_expired_sessions(exam_id=exam.id) == 0
+        assert get_mongo_db()["exam_sessions"].find_one({"_id": "sess_idem"})["is_submitted"] is True
 
 
 class TestGracePeriodSubmissionStillWorks:
@@ -141,8 +145,9 @@ class TestGracePeriodSubmissionStillWorks:
         exam = _exam(db, "exam_submit_grace", start_ago=120, duration_seconds=100)
         session = _session(db, "sess_submit_grace", exam, created_at=time.time() - 200)
 
-        finalize_expired_sessions(db, exam_id=exam.id)
-        assert session.is_submitted is False
+        finalize_expired_sessions(exam_id=exam.id)
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": session.id})
+        assert _doc["is_submitted"] is False
 
         jwt = create_session_jwt("23-TEST-01", exam.id, session.id)
         response = client.post(
@@ -151,9 +156,9 @@ class TestGracePeriodSubmissionStillWorks:
             headers={"Authorization": f"Bearer {jwt}"},
         )
         assert response.status_code == 200
-        db.refresh(session)
-        assert session.is_submitted is True
-        assert json.loads(session.submission_payload) == {"mcqs": {"q1": "A"}, "coding": {}}
+        _doc = get_mongo_db()["exam_sessions"].find_one({"_id": session.id})
+        assert _doc["is_submitted"] is True
+        assert _doc["submission_payload"] == {"mcqs": {"q1": "A"}, "coding": {}}
 
 
 class TestExpiredSessionInAdminViews:

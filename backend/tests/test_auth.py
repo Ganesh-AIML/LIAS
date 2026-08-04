@@ -1,7 +1,8 @@
 """Tests for authentication and authorization endpoints."""
 
 import time
-from app.models import ExamSession
+from app.database import get_mongo_db
+from app import repositories as repo
 
 
 class TestHealthCheck:
@@ -51,16 +52,15 @@ class TestJoinExam:
         # Should be rejected by field_validator before reaching DB
         assert response.status_code == 422
 
-    def test_join_revokes_old_session(self, client, db, sample_token):
+    def test_join_revokes_old_session(self, client, sample_token):
+        mdb = get_mongo_db()
         # First login
         client.post("/auth/join", json={
             "student_id": "23-TEST-01",
             "password": "Pass@1234",
             "exam_token": "LIAS_23-TEST-01_ABCD1234",
         })
-        old_sessions = db.query(ExamSession).filter(
-            ExamSession.student_id == "23-TEST-01"
-        ).all()
+        old_sessions = list(mdb["exam_sessions"].find({"student_id": "23-TEST-01"}))
         assert len(old_sessions) == 1
 
         # Second login should revoke the first
@@ -69,16 +69,17 @@ class TestJoinExam:
             "password": "Pass@1234",
             "exam_token": "LIAS_23-TEST-01_ABCD1234",
         })
-        sessions = db.query(ExamSession).filter(
-            ExamSession.student_id == "23-TEST-01"
-        ).order_by(ExamSession.created_at).all()
+        sessions = list(mdb["exam_sessions"].find({"student_id": "23-TEST-01"}).sort("created_at", 1))
         assert len(sessions) == 2
-        assert sessions[0].is_revoked is True
-        assert sessions[1].is_revoked is False
+        assert sessions[0]["is_revoked"] is True
+        assert sessions[1]["is_revoked"] is False
 
     def test_join_rejects_deactivated_student(self, client, db, sample_token, sample_student):
         sample_student.is_active = False
         db.commit()
+        get_mongo_db()["students"].update_one(
+            {"_id": sample_student.id}, {"$set": {"is_active": False}}
+        )
 
         response = client.post("/auth/join", json={
             "student_id": "23-TEST-01",

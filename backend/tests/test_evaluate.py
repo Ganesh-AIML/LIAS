@@ -8,8 +8,21 @@ import json
 import time
 import bcrypt
 
-from app.models import ExamSession, Exam, Question, CodingProblem, StaffAccount
+from app.models import ExamSession, Exam, Question, CodingProblem, SubjectiveQuestion, StaffAccount
 from app.auth import create_staff_jwt
+from app.database import get_mongo_db
+from app import repositories as repo
+
+
+def _mongo_mirror(orm_obj):
+    """Mirror any ORM object to its Mongo collection."""
+    coll = {
+        Exam: "exams", Question: "questions", CodingProblem: "coding_problems",
+        SubjectiveQuestion: "subjective_questions", ExamSession: "exam_sessions",
+        StaffAccount: "staff_accounts",
+    }.get(type(orm_obj))
+    if coll:
+        get_mongo_db()[coll].insert_one(dict(repo.doc_for(coll, orm_obj)))
 
 
 def _module_exam(db, eid="exam_mod_001", module="MAS701", title="Module Exam"):
@@ -22,6 +35,7 @@ def _module_exam(db, eid="exam_mod_001", module="MAS701", title="Module Exam"):
     )
     db.add(exam)
     db.commit()
+    get_mongo_db()["exams"].insert_one(dict(repo.doc_for("exams", exam)))
     return exam
 
 
@@ -34,6 +48,7 @@ def _submitted_session(db, exam, sid="sess_fac_001", student_id="23-TEST-01",
     )
     db.add(session)
     db.commit()
+    get_mongo_db()["exam_sessions"].insert_one(dict(repo.doc_for("exam_sessions", session)))
     return session
 
 
@@ -46,6 +61,7 @@ def _faculty(db, sid="staff_faculty2", name="Faculty Two", email="f2@test.local"
     )
     db.add(staff)
     db.commit()
+    get_mongo_db()["staff_accounts"].insert_one(dict(repo.doc_for("staff_accounts", staff)))
     return {"id": staff.id, "headers": {"Authorization": f"Bearer {create_staff_jwt(staff.id)}"}}
 
 
@@ -69,6 +85,7 @@ class TestEvaluateEndpoints:
         )
         db.add(q)
         db.commit()
+        _mongo_mirror(q)
         _submitted_session(db, exam, mcqs={"q_test_001": "A"})
 
         response = client.get(f"/admin/exams/{exam.id}/evaluate", headers=admin_headers)
@@ -96,9 +113,11 @@ class TestEvaluateEndpoints:
             text="Q2?", optA="A", optB="B", optC="C", optD="D", ans="B",
         )
         db.add(q)
+        _mongo_mirror(q)
         cp = CodingProblem(id="cp_test_001", exam_id=exam.id, title="Sum", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         session = _submitted_session(
             db, exam,
             mcqs={"q_test_002": "B"},
@@ -121,6 +140,7 @@ class TestEvaluateEndpoints:
         cp = CodingProblem(id="cp_adm_001", exam_id=exam.id, title="Multiply", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         session = _submitted_session(db, exam)
 
         resp = client.post(
@@ -135,6 +155,7 @@ class TestEvaluateEndpoints:
         cp = CodingProblem(id="cp_test_002", exam_id=exam.id, title="Multiply", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         session = _submitted_session(db, exam)
 
         save_resp = client.post(
@@ -188,6 +209,7 @@ class TestEvaluateEndpoints:
         cp = CodingProblem(id="cp_x_001", exam_id=exam.id, title="X", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         session = _submitted_session(db, exam)
 
         resp = client.post(
@@ -208,6 +230,7 @@ class TestEvaluateEndpoints:
         cp = CodingProblem(id="cp_adm_001", exam_id=exam.id, title="Adm", description="d")
         db.add(cp)
         db.commit()
+        _mongo_mirror(cp)
         session = _submitted_session(db, exam)
 
         f2 = _faculty(db)
